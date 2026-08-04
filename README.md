@@ -22,8 +22,10 @@ before using this for real trading decisions.
   top few candidates per request go to Claude.
 - **AI reasoning**: Claude (`claude-opus-5`) turns the computed features into
   a structured trade plan — recommendation, confidence, entry/stop/targets,
-  risk level, reasons for/against, and a plain-English summary — via the
-  Anthropic API's structured outputs.
+  risk level, reasons for/against, and a plain-English summary. Requests a
+  JSON object directly in the prompt and parses it (rather than the
+  Anthropic API's `output_format`/structured-outputs feature, which hit a
+  "Grammar compilation timed out" error on this schema during testing).
 - **Frontend**: Next.js dashboard showing ranked opportunity cards, plus a
   per-coin detail page.
 
@@ -59,11 +61,50 @@ uvicorn app.main:app --reload --port 8000
 ```bash
 cd frontend
 npm install
+copy .env.local.example .env.local   # defaults to http://localhost:8000, fine for local dev
 npm run dev
 ```
 
-Open http://localhost:3000. The Next.js dev server proxies `/api/*` to the
-backend on port 8000 (see `next.config.js`).
+Open http://localhost:3000. The frontend calls the backend directly using
+`NEXT_PUBLIC_API_BASE_URL` (see `frontend/lib/api.ts`) — no proxy involved.
+
+## Deploying
+
+The frontend (Next.js) and backend (FastAPI) deploy separately.
+
+### Backend → Render
+
+Vercel is not a good fit for the backend: `/api/opportunities` makes several
+parallel Claude calls and can take 30–60+ seconds, which exceeds or strains
+Vercel's serverless function time limits. Render runs it as a normal
+long-lived process instead.
+
+1. Push this repo to GitHub.
+2. In the [Render dashboard](https://dashboard.render.com), **New → Blueprint**,
+   point it at the repo — it will pick up `render.yaml` at the repo root and
+   create the `crypto-terminal-backend` web service automatically.
+3. On the service's **Environment** tab, set:
+   - `ANTHROPIC_API_KEY` — your key (never commit this)
+   - `ALLOWED_ORIGINS` — leave blank for now; come back and set it to your
+     Vercel URL once you have it (step 3 below), e.g.
+     `https://crypto-terminal.vercel.app`
+4. Deploy. Render gives you a URL like
+   `https://crypto-terminal-backend.onrender.com` — copy it.
+
+Note: on Render's free plan the service sleeps after ~15 minutes idle, so the
+first request after a gap adds a ~30–50s cold start on top of normal latency.
+
+### Frontend → Vercel
+
+1. In the [Vercel dashboard](https://vercel.com/new), import the same GitHub
+   repo, and set **Root Directory** to `frontend`.
+2. Add an environment variable: `NEXT_PUBLIC_API_BASE_URL` = your Render
+   backend URL from above (no trailing slash), e.g.
+   `https://crypto-terminal-backend.onrender.com`.
+3. Deploy. Copy the resulting Vercel URL.
+4. Go back to Render and set `ALLOWED_ORIGINS` on the backend service to that
+   Vercel URL, then redeploy the backend (Render → Manual Deploy) so CORS
+   allows the frontend to call it.
 
 ## Important disclaimers
 

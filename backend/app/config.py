@@ -1,5 +1,9 @@
 import os
 
+from dotenv import load_dotenv
+
+load_dotenv()
+
 ANTHROPIC_MODEL = "claude-opus-5"
 
 BINANCE_FUTURES_BASE = "https://fapi.binance.com"
@@ -13,3 +17,11 @@ UNIVERSE_SIZE = int(os.environ.get("UNIVERSE_SIZE", "40"))
 LLM_CANDIDATES = int(os.environ.get("LLM_CANDIDATES", "6"))
 
 ANTHROPIC_API_KEY = os.environ.get("ANTHROPIC_API_KEY")
+
+# Comma-separated list of allowed frontend origins for CORS, e.g.
+# "https://crypto-terminal.vercel.app,https://your-preview-url.vercel.app"
+ALLOWED_ORIGINS = [
+    origin.strip()
+    for origin in os.environ.get("ALLOWED_ORIGINS", "http://localhost:3000").split(",")
+    if origin.strip()
+]

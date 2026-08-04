@@ -34,9 +34,15 @@ async def get_opportunities(limit: int = Query(default=6, le=LLM_CANDIDATES)):
     scored.sort(key=lambda x: x[0], reverse=True)
     top = scored[:limit]
 
+    plans = await asyncio.gather(
+        *(asyncio.to_thread(analyze_symbol, features) for _, _, features in top),
+        return_exceptions=True,
+    )
+
     opportunities = []
-    for score, ticker, features in top:
-        plan = await asyncio.to_thread(analyze_symbol, features)
+    for (score, ticker, _), plan in zip(top, plans):
+        if isinstance(plan, Exception):
+            continue
         opportunities.append(
             Opportunity(
                 symbol=ticker["symbol"],

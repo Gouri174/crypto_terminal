@@ -5,3 +5,4 @@ pandas
 ta
 anthropic
 pydantic
+python-dotenv
