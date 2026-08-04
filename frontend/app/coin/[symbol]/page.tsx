@@ -3,7 +3,7 @@
 import { use, useEffect, useState } from "react";
 import Link from "next/link";
 import { fetchAnalysis } from "@/lib/api";
-import type { Opportunity } from "@/lib/types";
+import type { Opportunity, ScoreBreakdown } from "@/lib/types";
 
 export default function CoinDetailPage({
   params,
@@ -64,6 +64,12 @@ export default function CoinDetailPage({
           <Field label="Take Profit 2" value={plan.take_profit_2 ?? "—"} />
         </div>
 
+        {plan.score_breakdown && (
+          <Section title="Why This Score — Computed, Not Guessed">
+            <ScoreBars breakdown={plan.score_breakdown} />
+          </Section>
+        )}
+
         <Section title="AI Summary">
           <p className="text-gray-300">{plan.summary}</p>
         </Section>
@@ -88,11 +94,27 @@ export default function CoinDetailPage({
           </Section>
         )}
 
-        {plan.historical_comparison && (
-          <Section title="Historical Comparison">
-            <p className="text-gray-300">{plan.historical_comparison}</p>
+        {plan.invalidation && (
+          <Section title="Invalidation Point">
+            <p className="text-gray-300">{plan.invalidation}</p>
           </Section>
         )}
+
+        <Section title="Historical Similarity">
+          {plan.history_match ? (
+            <HistoryMatchCard match={plan.history_match} />
+          ) : (
+            <p className="text-gray-500 text-sm">
+              Not enough stored history for {data.symbol} yet — this is a real
+              limitation, not a fabricated stat. Historical similarity fills in
+              as the system backfills and accumulates more market data for
+              this symbol.
+            </p>
+          )}
+          {plan.historical_comparison && (
+            <p className="text-gray-300 mt-2">{plan.historical_comparison}</p>
+          )}
+        </Section>
 
         <p className="text-xs text-gray-600 mt-6 border-t border-border pt-4">
           {plan.disclaimer}
@@ -122,6 +144,65 @@ function Section({ title, children }: { title: string; children: React.ReactNode
     <div className="mb-5">
       <h2 className="text-sm font-semibold text-gray-400 mb-2">{title}</h2>
       {children}
+    </div>
+  );
+}
+
+const SCORE_ROWS: { key: keyof ScoreBreakdown; label: string; max: number }[] = [
+  { key: "trend", label: "Trend", max: 25 },
+  { key: "momentum", label: "Momentum", max: 15 },
+  { key: "volume", label: "Volume", max: 10 },
+  { key: "funding", label: "Funding", max: 10 },
+  { key: "structure", label: "Market Structure", max: 15 },
+  { key: "history", label: "History Match", max: 15 },
+  { key: "risk", label: "Risk Penalty", max: 0 },
+];
+
+function ScoreBars({ breakdown }: { breakdown: ScoreBreakdown }) {
+  return (
+    <div className="space-y-2">
+      {SCORE_ROWS.map(({ key, label, max }) => {
+        const value = breakdown[key];
+        const isPenalty = key === "risk";
+        const denom = isPenalty ? 20 : max;
+        const pct = Math.min(100, (Math.abs(value) / denom) * 100);
+        return (
+          <div key={key} className="flex items-center gap-3 text-sm">
+            <div className="w-32 text-gray-400 shrink-0">{label}</div>
+            <div className="flex-1 h-2 rounded bg-border overflow-hidden">
+              <div
+                className={isPenalty ? "h-full bg-bear" : "h-full bg-bull"}
+                style={{ width: `${pct}%` }}
+              />
+            </div>
+            <div className="w-10 text-right tabular-nums">{value}</div>
+          </div>
+        );
+      })}
+      <div className="flex items-center gap-3 text-sm font-semibold pt-1 border-t border-border">
+        <div className="w-32 text-gray-300 shrink-0">Total</div>
+        <div className="flex-1" />
+        <div className="w-10 text-right tabular-nums">{breakdown.total}</div>
+      </div>
+    </div>
+  );
+}
+
+function HistoryMatchCard({
+  match,
+}: {
+  match: NonNullable<import("@/lib/types").TradePlan["history_match"]>;
+}) {
+  return (
+    <div className="grid grid-cols-2 sm:grid-cols-3 gap-4 text-sm">
+      <Field label="Similar situations found" value={match.sample_size} />
+      <Field label="Of history available" value={match.total_history_available} />
+      <Field label="Win rate" value={`${match.win_rate}%`} />
+      <Field label="Mean return" value={`${match.mean_return_pct}%`} />
+      <Field label="Median return" value={`${match.median_return_pct}%`} />
+      {match.avg_drawdown_pct != null && (
+        <Field label="Avg drawdown" value={`${match.avg_drawdown_pct}%`} />
+      )}
     </div>
   );
 }

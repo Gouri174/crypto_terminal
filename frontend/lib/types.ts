@@ -1,3 +1,25 @@
+export interface ScoreBreakdown {
+  trend: number;
+  momentum: number;
+  volume: number;
+  funding: number;
+  structure: number;
+  history: number;
+  risk: number;
+  total: number;
+}
+
+export interface HistoryMatch {
+  sample_size: number;
+  total_history_available: number;
+  mean_return_pct: number;
+  median_return_pct: number;
+  win_rate: number;
+  avg_drawdown_pct: number | null;
+  horizon_candles: number | null;
+  most_similar_return_pct: number | null;
+}
+
 export interface TradePlan {
   symbol: string;
   recommendation: "long" | "short" | "no_trade" | string;
@@ -13,8 +35,11 @@ export interface TradePlan {
   market_regime: string | null;
   reasons_for: string[];
   reasons_against: string[];
+  invalidation: string | null;
   historical_comparison: string | null;
   summary: string;
+  score_breakdown: ScoreBreakdown | null;
+  history_match: HistoryMatch | null;
   disclaimer: string;
 }
 

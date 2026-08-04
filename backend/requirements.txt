@@ -6,3 +6,5 @@ ta
 anthropic
 pydantic
 python-dotenv
+sqlalchemy
+numpy

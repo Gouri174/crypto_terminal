@@ -15,39 +15,81 @@ trades, and every output is explicitly framed as a probabilistic estimate,
 never a guarantee. See [Important disclaimers](#important-disclaimers) below
 before using this for real trading decisions.
 
+## Architecture principle
+
+**The LLM never invents numbers.** A deterministic pipeline computes
+everything measurable — indicators, price structure, and historical
+statistics — from real data. Claude's only job is to *explain* that
+evidence in plain English: what supports the trade, what contradicts it,
+and where the thesis breaks. `confidence` is set in Python from the
+computed score, not parsed from what Claude claims it is.
+
 ## What's implemented
 
 - **Data**: Binance Futures public REST API (klines, funding rate, open
   interest, long/short ratio) — no exchange API key needed, read-only public
   endpoints.
 - **Indicators**: EMA(20/50/200), RSI, MACD, Bollinger Bands, ATR, ADX,
-  Stochastic RSI, OBV, computed across 1h/4h/1d timeframes via the `ta`
-  library.
-- **Scoring**: a deterministic pre-filter (`app/engine/scorer.py`) ranks the
-  ~40 highest-volume USDT pairs before spending any LLM calls, so only the
-  top few candidates per request go to Claude.
-- **AI reasoning**: Claude (`claude-opus-5`) turns the computed features into
-  a structured trade plan — recommendation, confidence, entry/stop/targets,
-  risk level, reasons for/against, and a plain-English summary. Requests a
-  JSON object directly in the prompt and parses it (rather than the
+  Stochastic RSI, OBV slope, CMF, MFI — computed across 1h/4h/1d timeframes
+  via the `ta` library.
+- **Smart-money structure** (`app/engine/smart_money.py`): swing-point
+  fractals, break of structure, change of character, and fair value gaps —
+  computed from pure OHLCV price action, no paid data or copied source.
+- **Historical backfill engine** (`app/engine/historical_engine.py`):
+  fetches real Binance OHLCV history and reconstructs every past candle into
+  a stored "market snapshot" (indicators + structure), computing each one's
+  *actual* realized forward return and drawdown since, for backfilled data,
+  the future is already known. Trigger via
+  `POST /api/backfill/{symbol}?interval=4h&days=730`.
+- **Historical similarity search** (`app/engine/similarity.py`): given the
+  current market state, finds the K nearest historical states of that same
+  symbol (standardized feature distance) and reports real win rate / mean /
+  median return / average drawdown from what actually happened — returns
+  `null` rather than a fabricated stat when there isn't enough history yet.
+- **Deterministic scoring model** (`app/engine/scoring.py`): a fixed,
+  documented weighted formula (trend, momentum, volume, funding, structure,
+  history match, risk penalty) — this is the confidence score. Claude
+  explains it; it cannot change it.
+- **AI reasoning**: Claude (`claude-opus-5`) receives the computed score
+  breakdown and real historical-match stats and explains them — entry/stop/
+  targets, reasons for/against, and an explicit invalidation point. Requests
+  a JSON object directly in the prompt and parses it (rather than the
   Anthropic API's `output_format`/structured-outputs feature, which hit a
   "Grammar compilation timed out" error on this schema during testing).
-- **Frontend**: Next.js dashboard showing ranked opportunity cards, plus a
-  per-coin detail page.
+- **Storage**: SQLAlchemy, SQLite by default (zero extra infra), swap to
+  Postgres by setting `DATABASE_URL` — no code changes needed.
+- **Frontend**: Next.js dashboard with ranked opportunity cards; the detail
+  page renders the score breakdown as bars and the historical-match stats,
+  not just prose.
 
-## What's NOT implemented (out of scope for this first version)
+## Roadmap — what's NOT implemented yet, and why
 
-- Other exchanges (Bybit, OKX, Coinbase, Hyperliquid) — only Binance Futures.
-- On-chain data (whale wallets, exchange flows), news/social sentiment, and a
-  real historical-pattern-matching vector database. The AI is told explicitly
-  not to invent numbers for these and to speak qualitatively when asked.
-- Trade execution of any kind. There is no exchange API key anywhere in this
-  codebase, by design.
-- Auth, persistence/database, alerts, portfolio tracking.
+This follows a phased build rather than attempting everything at once:
 
-These are natural next additions — the `data_sources/` and `engine/` modules
-are structured so a new provider is one new file plus a line in
-`feature_builder.py`.
+- **Continuous background engine.** Right now analysis runs on-demand (an
+  HTTP request triggers a live scan). "Every minute, automatically" needs a
+  background worker + scheduler running independently of any request — a
+  real architecture change, planned next.
+- **More exchanges** (Bybit, OKX, Hyperliquid, Coinbase, Kraken, Bitget) —
+  same pattern as Binance, additive, not yet built.
+- **Order flow** (order book depth, CVD, liquidation clusters) — needs
+  websocket order-book state tracking, a distinct engineering effort.
+- **On-chain data** (Glassnode/CryptoQuant/CoinMetrics-tier) — these are
+  paid products. Not integrated; would need your own subscription and API
+  key, same pattern as the Anthropic key.
+- **Macro/news/sentiment** — free sources (RSS, FRED, Fear & Greed, GitHub
+  activity) are straightforward next additions; X/Twitter's API is paid and
+  not planned.
+- **RAG knowledge base** — will be built from free/public sources only
+  (Binance Academy/Research, CME/Fed publications, arXiv/SSRN, your own
+  notes). Will **not** ingest copyrighted trading books — that's a real
+  copyright line, not a technical limitation.
+- **`lightweight-charts` with AI-drawn overlays**, **live trade-state
+  sidebar** (Wait → Buy → Move Stop → Exit), **trade journal / position
+  tracking**, **personalization** (capital, risk %, spot-only) — all
+  designed for, none built yet.
+- Trade execution of any kind. There is no exchange API key anywhere in
+  this codebase, by design, and that won't change silently.
 
 ## Setup
 
@@ -99,6 +141,11 @@ long-lived process instead.
 
 Note: on Render's free plan the service sleeps after ~15 minutes idle, so the
 first request after a gap adds a ~30–50s cold start on top of normal latency.
+
+Note on storage: the backend defaults to a local SQLite file, which lives on
+Render's ephemeral disk — a redeploy wipes backfilled history. Set
+`DATABASE_URL` to a Postgres connection string (Render offers a free
+Postgres instance) once you want backfilled history to persist.
 
 ### Frontend → Vercel
 

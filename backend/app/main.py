@@ -2,7 +2,8 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
 from app.config import ALLOWED_ORIGINS
-from app.routes import analyze, ask, opportunities
+from app.db import init_db
+from app.routes import analyze, ask, backfill, opportunities
 
 app = FastAPI(
     title="Crypto AI Terminal API",
@@ -22,6 +23,12 @@ app.add_middleware(
 app.include_router(opportunities.router, prefix="/api")
 app.include_router(analyze.router, prefix="/api")
 app.include_router(ask.router, prefix="/api")
+app.include_router(backfill.router, prefix="/api")
+
+
+@app.on_event("startup")
+async def on_startup():
+    init_db()
 
 
 @app.get("/api/health")

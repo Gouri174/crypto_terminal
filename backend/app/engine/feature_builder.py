@@ -1,6 +1,7 @@
 import asyncio
 
 from app.data_sources import binance
+from app.engine.smart_money import compute_structure
 from app.indicators.technical import compute_indicators, klines_to_df
 
 
@@ -20,9 +21,21 @@ async def build_features(symbol: str) -> dict:
     for label, klines in (("1h", klines_1h), ("4h", klines_4h), ("1d", klines_1d)):
         if isinstance(klines, Exception):
             features[f"indicators_{label}"] = None
+            features[f"structure_{label}"] = None
             continue
         df = klines_to_df(klines)
         features[f"indicators_{label}"] = compute_indicators(df)
+
+        structure = compute_structure(df)
+        last = structure.iloc[-1]
+        features[f"structure_{label}"] = {
+            "trend": last["trend"],
+            "bos_up": bool(last["bos_up"]),
+            "bos_down": bool(last["bos_down"]),
+            "choch": bool(last["choch"]),
+            "fvg_up": bool(last["fvg_up"]),
+            "fvg_down": bool(last["fvg_down"]),
+        }
 
     if not isinstance(premium, Exception):
         features["funding_rate"] = float(premium["lastFundingRate"])
