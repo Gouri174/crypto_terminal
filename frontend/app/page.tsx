@@ -1,0 +1,51 @@
+"use client";
+
+import { useEffect, useState } from "react";
+import { fetchOpportunities } from "@/lib/api";
+import type { Opportunity } from "@/lib/types";
+import OpportunityCard from "@/components/OpportunityCard";
+
+export default function DashboardPage() {
+  const [opportunities, setOpportunities] = useState<Opportunity[] | null>(null);
+  const [error, setError] = useState<string | null>(null);
+
+  useEffect(() => {
+    fetchOpportunities(6)
+      .then(setOpportunities)
+      .catch((e) => setError(e.message));
+  }, []);
+
+  return (
+    <main className="max-w-6xl mx-auto px-6 py-10">
+      <header className="mb-8">
+        <h1 className="text-2xl font-bold mb-1">Today&apos;s AI Trade Opportunities</h1>
+        <p className="text-sm text-gray-400">
+          AI-generated analysis of Binance USDT-perpetual futures. Estimates, not
+          guarantees — always confirm risk yourself before trading.
+        </p>
+      </header>
+
+      {error && (
+        <div className="rounded border border-bear text-bear p-4 mb-6">
+          {error}. Is the backend running on :8000 with ANTHROPIC_API_KEY set?
+        </div>
+      )}
+
+      {!opportunities && !error && (
+        <div className="text-gray-500">Scanning markets and running AI analysis…</div>
+      )}
+
+      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
+        {opportunities?.map((opp) => (
+          <OpportunityCard key={opp.symbol} opp={opp} />
+        ))}
+      </div>
+
+      <footer className="mt-10 text-xs text-gray-600 border-t border-border pt-4">
+        Not financial advice. AI-generated trade plans are probabilistic estimates
+        based on current market data, not predictions of future outcomes. No trade
+        is guaranteed to succeed. This tool does not execute trades.
+      </footer>
+    </main>
+  );
+}
