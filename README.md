@@ -4,6 +4,12 @@ AI-ranked crypto trade setups: scans Binance USDT-perpetual futures, computes
 technical indicators, and uses Claude to produce a trade plan (entry, stop
 loss, take-profit levels, confidence, reasoning) for the strongest setups.
 
+**Live frontend:** https://frontend-kappa-six-60.vercel.app — deployed, but
+will sit on "Scanning markets…" until the backend is also deployed publicly
+(see [Deploying](#deploying)) and `NEXT_PUBLIC_API_BASE_URL` is set on
+Vercel to point at it. Right now it only works for whoever has the backend
+running on their own `localhost:8000`.
+
 **This is analysis only.** It does not hold exchange API keys, does not place
 trades, and every output is explicitly framed as a probabilistic estimate,
 never a guarantee. See [Important disclaimers](#important-disclaimers) below
