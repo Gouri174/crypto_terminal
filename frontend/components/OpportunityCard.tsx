@@ -1,5 +1,6 @@
 import Link from "next/link";
 import type { Opportunity } from "@/lib/types";
+import { lifecycleColor, lifecycleLabel } from "@/lib/lifecycle";
 
 function recColor(rec: string) {
   if (rec === "long") return "text-bull border-bull";
@@ -26,11 +27,20 @@ export default function OpportunityCard({ opp }: { opp: Opportunity }) {
         </span>
       </div>
 
-      <div className="text-sm text-gray-400 mb-3">
-        ${opp.last_price.toLocaleString()}{" "}
-        <span className={opp.change_24h_pct >= 0 ? "text-bull" : "text-bear"}>
-          {opp.change_24h_pct >= 0 ? "+" : ""}
-          {opp.change_24h_pct.toFixed(2)}%
+      <div className="flex items-center justify-between mb-3">
+        <div className="text-sm text-gray-400">
+          ${opp.last_price.toLocaleString()}{" "}
+          <span className={opp.change_24h_pct >= 0 ? "text-bull" : "text-bear"}>
+            {opp.change_24h_pct >= 0 ? "+" : ""}
+            {opp.change_24h_pct.toFixed(2)}%
+          </span>
+        </div>
+        <span
+          className={`text-[10px] uppercase font-semibold px-2 py-0.5 rounded border ${lifecycleColor(
+            opp.lifecycle_status
+          )}`}
+        >
+          {lifecycleLabel(opp.lifecycle_status)}
         </span>
       </div>
 

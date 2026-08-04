@@ -14,16 +14,19 @@ def _structure(features: dict, tf: str) -> dict:
     return features.get(f"structure_{tf}") or {}
 
 
-def score_opportunity(features: dict, history_stats: dict | None) -> dict:
+def score_opportunity(
+    features: dict, history_stats: dict | None, regime: dict | None = None
+) -> dict:
     trend = _trend_score(features)
     momentum = _momentum_score(features)
     volume = _volume_score(features)
     funding = _funding_score(features)
     structure = _structure_score(features)
     history = _history_score(history_stats)
+    regime_score = _regime_score(features, regime)
     risk = _risk_penalty(features)
 
-    total = trend + momentum + volume + funding + structure + history + risk
+    total = trend + momentum + volume + funding + structure + history + regime_score + risk
     total = max(0.0, min(100.0, total))
 
     return {
@@ -33,6 +36,7 @@ def score_opportunity(features: dict, history_stats: dict | None) -> dict:
         "funding": funding,
         "structure": structure,
         "history": history,
+        "regime": regime_score,
         "risk": risk,
         "total": round(total, 1),
     }
@@ -114,6 +118,31 @@ def _history_score(history_stats: dict | None) -> float:
     win_rate = history_stats["win_rate"]
     scaled = (win_rate - 50) / 50 * 15
     return round(max(-15.0, min(15.0, scaled)), 2)
+
+
+def _regime_score(features: dict, regime: dict | None) -> float:
+    """Rewards a symbol whose own trend agrees with the overall market
+    regime, penalizes one fighting it. Neutral when the regime is mixed or
+    hasn't been computed yet (e.g. the very first scan cycle)."""
+    if not regime or regime.get("trend") not in ("bullish", "bearish"):
+        return 0.0
+
+    votes = [
+        _tf(features, tf).get("trend_vs_ema50")
+        for tf in ("1h", "4h", "1d")
+        if _tf(features, tf).get("trend_vs_ema50")
+    ]
+    if not votes:
+        return 0.0
+    above, below = votes.count("above"), votes.count("below")
+    symbol_bullish, symbol_bearish = above > below, below > above
+
+    regime_bullish = regime["trend"] == "bullish"
+    if (regime_bullish and symbol_bullish) or (not regime_bullish and symbol_bearish):
+        return 5.0
+    if (regime_bullish and symbol_bearish) or (not regime_bullish and symbol_bullish):
+        return -5.0
+    return 0.0
 
 
 def _risk_penalty(features: dict) -> float:

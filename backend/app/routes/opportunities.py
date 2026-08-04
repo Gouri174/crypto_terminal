@@ -3,7 +3,7 @@ from sqlalchemy import select
 
 from app.config import LLM_CANDIDATES
 from app.db import SessionLocal
-from app.engine.background_scanner import ensure_scanned
+from app.engine.background_scanner import ensure_scanned, load_current_regime
 from app.models.db_models import LiveOpportunity
 from app.models.schemas import Opportunity
 
@@ -22,6 +22,8 @@ async def get_opportunities(limit: int = Query(default=6, le=LLM_CANDIDATES)):
         await ensure_scanned()
         rows = _load_top(limit)
 
+    regime = load_current_regime()
+
     return [
         Opportunity(
             symbol=row.symbol,
@@ -29,6 +31,9 @@ async def get_opportunities(limit: int = Query(default=6, le=LLM_CANDIDATES)):
             last_price=row.last_price,
             change_24h_pct=row.change_24h_pct,
             trade_plan=row.trade_plan,
+            lifecycle_status=row.lifecycle_status,
+            lifecycle_history=row.lifecycle_history or [],
+            regime=regime,
         )
         for row in rows
     ]

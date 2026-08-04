@@ -4,6 +4,7 @@ import { useEffect, useState } from "react";
 import { fetchOpportunities, subscribeToScannerUpdates } from "@/lib/api";
 import type { Opportunity } from "@/lib/types";
 import OpportunityCard from "@/components/OpportunityCard";
+import RegimeBanner from "@/components/RegimeBanner";
 
 export default function DashboardPage() {
   const [opportunities, setOpportunities] = useState<Opportunity[] | null>(null);
@@ -58,6 +59,8 @@ export default function DashboardPage() {
           {error}. Is the backend running on :8000 with ANTHROPIC_API_KEY set?
         </div>
       )}
+
+      {opportunities?.[0]?.regime && <RegimeBanner regime={opportunities[0].regime} />}
 
       {!opportunities && !error && (
         <div className="text-gray-500">Scanning markets and running AI analysis…</div>

@@ -11,23 +11,27 @@ _client = anthropic.Anthropic()
 SYSTEM_PROMPT = """You are an institutional-grade cryptocurrency market analyst.
 
 You do NOT decide the confidence score. It has already been calculated
-deterministically from the indicator, structure, funding, and historical
-data below (see "precomputed_score"). Your job is to EXPLAIN that score —
-what evidence supports it, what evidence contradicts it, and under what
-condition the thesis would be invalidated — never to invent a different
-number or claim certainty about future price movement. Never say a trade is
-"guaranteed" or "for sure" to succeed.
+deterministically from the indicator, structure, funding, regime, and
+historical data below (see "precomputed_score"). Your job is to EXPLAIN
+that score — what evidence supports it, what evidence contradicts it, and
+under what condition the thesis would be invalidated — never to invent a
+different number or claim certainty about future price movement. Never say
+a trade is "guaranteed" or "for sure" to succeed.
 
 You were given: multi-timeframe technical indicators (EMA/RSI/MACD/Bollinger
 Bands/ATR/ADX/Stochastic RSI/OBV slope/CMF/MFI), price-structure flags
 computed from pure price action (trend, break-of-structure, change-of-
 character, fair value gaps — no proprietary data, just OHLCV math), funding
-rate, open interest, long/short ratio, and — when available — REAL
-historical-similarity statistics computed from this exact symbol's own
-stored market history ("history_match": how many similar past states were
-found, and what actually happened after them). If history_match is null,
-there is not yet enough stored history for this symbol — say so plainly,
-do not invent a hit rate or cite specific past dates you were not given.
+rate, open interest, long/short ratio, the OVERALL MARKET REGIME (computed
+from BTC's trend plus breadth across the scanned universe — "market_regime"
+below; every symbol's setup should be read in this context, e.g. a bullish
+altcoin thesis is weaker evidence during a risk-off regime), and — when
+available — REAL historical-similarity statistics computed from this exact
+symbol's own stored market history ("history_match": how many similar past
+states were found, and what actually happened after them). If history_match
+is null, there is not yet enough stored history for this symbol — say so
+plainly, do not invent a hit rate or cite specific past dates you were not
+given.
 
 Recommend "no_trade" when the setup is not clean — that is a valid and often
 correct answer, not a failure to produce output.
@@ -51,7 +55,7 @@ before or after it — matching exactly this shape:
   "risk_level": "low" | "medium" | "high",
   "time_horizon": "scalp" | "intraday" | "swing" | "position",
   "risk_reward": string or null,
-  "market_regime": string or null,
+  "market_regime": string or null (one sentence on how the overall regime given below affects THIS symbol's setup),
   "reasons_for": [string, ...],
   "reasons_against": [string, ...],
   "invalidation": string or null,
@@ -65,12 +69,16 @@ _JSON_BLOCK_RE = re.compile(r"\{.*\}", re.DOTALL)
 
 
 def build_user_prompt(
-    features: dict, score_breakdown: dict, history_stats: dict | None
+    features: dict,
+    score_breakdown: dict,
+    history_stats: dict | None,
+    regime: dict | None,
 ) -> str:
     payload = {
         "market_data": features,
         "precomputed_score": score_breakdown,
         "history_match": history_stats,
+        "market_regime": regime,
     }
     return (
         "Analyze this futures pair and produce a trade plan. Use only the "
@@ -84,7 +92,10 @@ def build_user_prompt(
 
 
 def analyze_symbol(
-    features: dict, score_breakdown: dict, history_stats: dict | None
+    features: dict,
+    score_breakdown: dict,
+    history_stats: dict | None,
+    regime: dict | None = None,
 ) -> TradePlan:
     response = _client.messages.create(
         model=ANTHROPIC_MODEL,
@@ -96,7 +107,7 @@ def analyze_symbol(
         messages=[
             {
                 "role": "user",
-                "content": build_user_prompt(features, score_breakdown, history_stats),
+                "content": build_user_prompt(features, score_breakdown, history_stats, regime),
             }
         ],
     )

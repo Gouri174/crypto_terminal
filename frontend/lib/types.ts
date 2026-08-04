@@ -5,6 +5,7 @@ export interface ScoreBreakdown {
   funding: number;
   structure: number;
   history: number;
+  regime: number;
   risk: number;
   total: number;
 }
@@ -18,6 +19,17 @@ export interface HistoryMatch {
   avg_drawdown_pct: number | null;
   horizon_candles: number | null;
   most_similar_return_pct: number | null;
+}
+
+export interface RegimeInfo {
+  label: "risk_on" | "risk_off" | "mixed" | string;
+  trend: "bullish" | "bearish" | "ranging" | "transitional" | string;
+  confidence: number;
+  btc_trend: string;
+  breadth_bullish_pct: number;
+  breadth_bearish_pct: number;
+  universe_size: number;
+  summary: string;
 }
 
 export interface TradePlan {
@@ -43,10 +55,19 @@ export interface TradePlan {
   disclaimer: string;
 }
 
+export interface LifecycleEvent {
+  at: number;
+  status: string;
+  reason: string;
+}
+
 export interface Opportunity {
   symbol: string;
   score: number;
   last_price: number;
   change_24h_pct: number;
   trade_plan: TradePlan;
+  lifecycle_status: string;
+  lifecycle_history: LifecycleEvent[];
+  regime: RegimeInfo | null;
 }

@@ -5,13 +5,21 @@ phase; a real worker queue is a later scaling step, not a requirement to
 satisfy "always analyzed, not on-click." Every cycle:
 
 1. Recompute the deterministic score for the whole universe (indicators,
-   structure, historical similarity) — cheap, no LLM involved.
-2. Persist that state for every scanned symbol, so the site is already
+   structure, historical similarity, and the market regime from the
+   PREVIOUS cycle — see note below) — cheap, no LLM involved.
+2. Advance each symbol's trade lifecycle from live price vs. its last known
+   trade plan — also deterministic, also no LLM.
+3. Persist that state for every scanned symbol, so the site is already
    analyzed the moment someone opens it.
-3. Only call Claude for symbols that are top-ranked AND (never explained
+4. Only call Claude for symbols that are top-ranked AND (never explained
    yet, OR their score moved enough to matter, OR the last explanation is
    stale) — this is what keeps LLM spend bounded regardless of universe
    size, instead of scaling with (coins x minutes).
+5. Recompute the market regime from THIS cycle's data and store it for
+   next cycle's scoring pass. Regime therefore lags scoring by one cycle
+   (a few minutes) — a deliberate simplification to avoid a circular
+   dependency (breadth needs everyone's features, which needs to exist
+   before regime can be computed), not an oversight.
 """
 
 import asyncio
@@ -28,11 +36,12 @@ from app.config import (
 )
 from app.data_sources import binance
 from app.db import SessionLocal
+from app.engine import lifecycle, market_regime
 from app.engine.feature_builder import build_features
 from app.engine.reasoning import analyze_symbol
 from app.engine.scoring import score_opportunity
 from app.engine.similarity import build_current_vector, find_similar
-from app.models.db_models import LiveOpportunity
+from app.models.db_models import LiveOpportunity, MarketRegimeState
 from app.ws import broadcast_update
 
 SIMILARITY_INTERVAL = "4h"
@@ -59,7 +68,45 @@ async def ensure_scanned() -> None:
         await _run_scan()
 
 
+def load_current_regime() -> dict | None:
+    session = SessionLocal()
+    try:
+        row = session.get(MarketRegimeState, 1)
+        if row is None:
+            return None
+        return {
+            "label": row.label,
+            "trend": row.trend,
+            "confidence": row.confidence,
+            "btc_trend": row.btc_trend,
+            "breadth_bullish_pct": row.breadth_bullish_pct,
+            "breadth_bearish_pct": row.breadth_bearish_pct,
+            "universe_size": row.universe_size,
+            "summary": row.summary,
+        }
+    finally:
+        session.close()
+
+
+def _save_regime(regime: dict, now_ms: int) -> None:
+    session = SessionLocal()
+    try:
+        row = session.get(MarketRegimeState, 1)
+        if row is None:
+            row = MarketRegimeState(id=1, updated_at=now_ms, **regime)
+            session.add(row)
+        else:
+            row.updated_at = now_ms
+            for key, value in regime.items():
+                setattr(row, key, value)
+        session.commit()
+    finally:
+        session.close()
+
+
 async def _run_scan() -> dict:
+    regime = load_current_regime()  # from the previous cycle — see module docstring
+
     tickers = await binance.get_24h_tickers()
     usdt_pairs = [t for t in tickers if t["symbol"].endswith("USDT")]
     usdt_pairs.sort(key=lambda t: float(t["quoteVolume"]), reverse=True)
@@ -71,15 +118,18 @@ async def _run_scan() -> dict:
     )
 
     scored = []
+    btc_features = None
     for ticker, features in zip(universe, feature_sets):
         if isinstance(features, Exception):
             continue
+        if ticker["symbol"] == "BTCUSDT":
+            btc_features = features
         history_stats = None
         ind_4h = features.get(f"indicators_{SIMILARITY_INTERVAL}")
         if ind_4h:
             current_vec = build_current_vector(ind_4h)
             history_stats = find_similar(ticker["symbol"], SIMILARITY_INTERVAL, current_vec)
-        breakdown = score_opportunity(features, history_stats)
+        breakdown = score_opportunity(features, history_stats, regime)
         scored.append((breakdown["total"], breakdown, history_stats, ticker, features))
 
     scored.sort(key=lambda x: x[0], reverse=True)
@@ -89,19 +139,24 @@ async def _run_scan() -> dict:
     explained = 0
     for symbol, features, breakdown, history_stats in to_explain:
         try:
-            plan = await asyncio.to_thread(analyze_symbol, features, breakdown, history_stats)
+            plan = await asyncio.to_thread(
+                analyze_symbol, features, breakdown, history_stats, regime
+            )
         except Exception as exc:
             print(f"[scanner] Claude explanation failed for {symbol}: {exc}")
             continue
         _save_trade_plan(symbol, plan, breakdown["total"], now_ms)
         explained += 1
 
+    new_regime = market_regime.classify_regime(btc_features, scored)
+    _save_regime(new_regime, now_ms)
+
     return {"scanned": len(scored), "explained": explained, "at": now_ms}
 
 
 def _persist_scan(scored: list, now_ms: int) -> list:
-    """Writes score+features for every scanned symbol; returns the subset
-    that needs a fresh Claude explanation this cycle."""
+    """Writes score+features+lifecycle for every scanned symbol; returns
+    the subset that needs a fresh Claude explanation this cycle."""
     session = SessionLocal()
     to_explain = []
     try:
@@ -113,6 +168,7 @@ def _persist_scan(scored: list, now_ms: int) -> list:
         for rank, (total, breakdown, history_stats, ticker, features) in enumerate(scored):
             symbol = ticker["symbol"]
             row = existing.get(symbol)
+            price = float(ticker["lastPrice"])
 
             needs_llm = False
             if rank < LLM_CANDIDATES:
@@ -134,11 +190,26 @@ def _persist_scan(scored: list, now_ms: int) -> list:
                     score_total=0.0,
                     score_breakdown={},
                     features={},
+                    lifecycle_status="WAIT",
+                    lifecycle_history=[],
                 )
                 session.add(row)
 
+            new_status, reason, new_sig = lifecycle.advance(
+                row.lifecycle_status or "WAIT",
+                row.lifecycle_plan_signature or "none",
+                price,
+                row.trade_plan,  # the PREVIOUS cycle's plan — this cycle's may not exist yet
+            )
+            if reason:
+                history = list(row.lifecycle_history or [])
+                history.append({"at": now_ms, "status": new_status, "reason": reason})
+                row.lifecycle_history = history[-50:]
+            row.lifecycle_status = new_status
+            row.lifecycle_plan_signature = new_sig
+
             row.updated_at = now_ms
-            row.last_price = float(ticker["lastPrice"])
+            row.last_price = price
             row.change_24h_pct = float(ticker["priceChangePercent"])
             row.score_total = total
             row.score_breakdown = breakdown

@@ -95,3 +95,32 @@ class LiveOpportunity(Base):
     trade_plan: Mapped[dict | None] = mapped_column(JSON, nullable=True)
     trade_plan_updated_at: Mapped[int | None] = mapped_column(Integer, nullable=True)
     last_llm_score: Mapped[float | None] = mapped_column(Float, nullable=True)
+
+    # Trade lifecycle state — see app/engine/lifecycle.py. Advances
+    # deterministically each scan cycle from live price vs. the stored
+    # trade_plan's entry/stop/TP levels; never inferred by the LLM.
+    lifecycle_status: Mapped[str] = mapped_column(String(30), default="WAIT")
+    lifecycle_plan_signature: Mapped[str | None] = mapped_column(String(100), nullable=True)
+    lifecycle_history: Mapped[list] = mapped_column(JSON, default=list)
+
+
+class MarketRegimeState(Base):
+    """The scanner's latest market-regime read (single row, id=1).
+
+    Computed from BTC's own trend/structure plus breadth across the
+    scanned universe — every symbol's score inherits this context. See
+    app/engine/market_regime.py.
+    """
+
+    __tablename__ = "market_regime_state"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    updated_at: Mapped[int] = mapped_column(Integer)
+    label: Mapped[str] = mapped_column(String(20))  # "risk_on" | "risk_off" | "mixed"
+    trend: Mapped[str] = mapped_column(String(10))  # "bullish" | "bearish" | "ranging"
+    confidence: Mapped[int] = mapped_column(Integer)
+    btc_trend: Mapped[str] = mapped_column(String(10))
+    breadth_bullish_pct: Mapped[float] = mapped_column(Float)
+    breadth_bearish_pct: Mapped[float] = mapped_column(Float)
+    universe_size: Mapped[int] = mapped_column(Integer)
+    summary: Mapped[str] = mapped_column(String(500))

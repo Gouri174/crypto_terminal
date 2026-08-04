@@ -75,21 +75,52 @@ computed score, not parsed from what Claude claims it is.
   dashboard refreshes automatically (with auto-reconnect) instead of
   polling. The frontend re-fetches via the normal REST call on that signal
   rather than trusting a pushed payload — simple, hard to get out of sync.
-- **Frontend**: Next.js dashboard with ranked opportunity cards and a live
-  indicator; the detail page renders the score breakdown as bars and the
-  historical-match stats, not just prose.
+- **Market regime detection** (`app/engine/market_regime.py`,
+  `GET /api/regime`): classifies the overall market — risk-on/risk-off/mixed,
+  trend, confidence — from BTC's own trend plus breadth across the scanned
+  universe (% of coins above their 4h EMA50). Every symbol's score inherits
+  this as a `regime` component (bonus for aligning with the regime, penalty
+  for fighting it, neutral when the regime itself is genuinely mixed).
+  Deliberately lags scoring by one scan cycle to avoid a circular
+  dependency (breadth needs everyone's features to exist first) — documented
+  in the module, not a bug.
+- **Trade lifecycle engine** (`app/engine/lifecycle.py`): a deterministic
+  state machine — WAIT → PREPARE → BUY_NOW → MOVE_STOP_TO_ENTRY →
+  TAKE_PARTIAL_PROFIT → HOLD → EXIT_TARGET/EXIT_STOPPED — advanced every
+  scan cycle purely from live price crossing the stored plan's entry/stop/
+  TP levels. No LLM involved in the transitions; each change is logged with
+  a plain-English reason into a per-symbol timeline shown on the detail
+  page. Verified across real scan cycles: three symbols advanced
+  WAIT → BUY_NOW as price entered their entry zones between cycles.
+- **Frontend**: Next.js dashboard with ranked opportunity cards, a live
+  indicator, a market-regime banner, and per-symbol lifecycle badges; the
+  detail page renders the score breakdown as bars (component/max, e.g.
+  "14.19/25"), the historical-match stats, and the lifecycle timeline.
 
 ## Roadmap — what's NOT implemented yet, and why
 
 This follows a phased build rather than attempting everything at once:
 
+- **Richer historical similarity** — currently matches on technical
+  indicators only (RSI/MACD/BB/ATR/ADX/StochRSI/OBV/CMF/MFI). Adding
+  funding-rate history as a matching dimension is straightforward (Binance's
+  funding-rate history endpoint is free); open-interest history is not
+  (Binance only retains ~30 days for free), so that dimension would need a
+  different source or would stay indicator-only.
+- **AI Journal** — the lifecycle engine already logs every WAIT→BUY→EXIT
+  transition with a reason, which is the raw material for "trades with
+  ADX>35 + neutral funding won 71%" style learning. Aggregating that into a
+  journal with outcome statistics per condition is the next step, not yet
+  built.
 - **A real worker queue (Celery/Redis).** The current single-process
   asyncio loop satisfies "always analyzed, not on-click" without extra
   infra, but doesn't horizontally scale past one process and doesn't
   survive a process restart mid-cycle gracefully. Worth adding once running
   more than one backend instance.
 - **More exchanges** (Bybit, OKX, Hyperliquid, Coinbase, Kraken, Bitget) —
-  same pattern as Binance, additive, not yet built.
+  same pattern as Binance, additive, not yet built. Deliberately deprioritized
+  below the items above — more exchanges increase coverage, not signal
+  quality.
 - **Order flow** (order book depth, CVD, liquidation clusters) — needs
   websocket order-book state tracking, a distinct engineering effort.
 - **On-chain data** (Glassnode/CryptoQuant/CoinMetrics-tier) — these are
@@ -102,10 +133,9 @@ This follows a phased build rather than attempting everything at once:
   (Binance Academy/Research, CME/Fed publications, arXiv/SSRN, your own
   notes). Will **not** ingest copyrighted trading books — that's a real
   copyright line, not a technical limitation.
-- **`lightweight-charts` with AI-drawn overlays**, **live trade-state
-  sidebar** (Wait → Buy → Move Stop → Exit), **trade journal / position
-  tracking**, **personalization** (capital, risk %, spot-only) — all
-  designed for, none built yet.
+- **`lightweight-charts` with AI-drawn overlays** (buy zone, stop, TPs,
+  support/resistance, order blocks) and **personalization** (capital,
+  risk %, spot-only) — designed for, not yet built.
 - Trade execution of any kind. There is no exchange API key anywhere in
   this codebase, by design, and that won't change silently.
 

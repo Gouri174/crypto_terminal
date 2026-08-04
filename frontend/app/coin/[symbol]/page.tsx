@@ -4,6 +4,8 @@ import { use, useEffect, useState } from "react";
 import Link from "next/link";
 import { fetchAnalysis } from "@/lib/api";
 import type { Opportunity, ScoreBreakdown } from "@/lib/types";
+import { lifecycleColor, lifecycleLabel } from "@/lib/lifecycle";
+import RegimeBanner from "@/components/RegimeBanner";
 
 export default function CoinDetailPage({
   params,
@@ -47,10 +49,22 @@ export default function CoinDetailPage({
         ← Back
       </Link>
 
-      <div className="mt-4 rounded-lg border border-border bg-panel p-6">
-        <div className="flex items-center justify-between mb-4">
+      {data.regime && <div className="mt-4"><RegimeBanner regime={data.regime} /></div>}
+
+      <div className="rounded-lg border border-border bg-panel p-6">
+        <div className="flex items-center justify-between mb-1">
           <h1 className="text-2xl font-bold">{data.symbol}</h1>
           <span className="text-xl">${data.last_price.toLocaleString()}</span>
+        </div>
+
+        <div className="mb-4">
+          <span
+            className={`text-xs uppercase font-semibold px-2 py-1 rounded border ${lifecycleColor(
+              data.lifecycle_status
+            )}`}
+          >
+            {lifecycleLabel(data.lifecycle_status)}
+          </span>
         </div>
 
         <div className="grid grid-cols-2 sm:grid-cols-4 gap-4 mb-6 text-sm">
@@ -116,6 +130,30 @@ export default function CoinDetailPage({
           )}
         </Section>
 
+        {data.lifecycle_history.length > 0 && (
+          <Section title="Live Reasoning Timeline">
+            <ul className="space-y-2">
+              {[...data.lifecycle_history].reverse().map((ev, i) => (
+                <li key={i} className="text-sm border-l-2 border-border pl-3">
+                  <div className="flex items-center gap-2">
+                    <span className="text-gray-500 text-xs">
+                      {new Date(ev.at).toLocaleTimeString()}
+                    </span>
+                    <span
+                      className={`text-[10px] uppercase font-semibold px-1.5 py-0.5 rounded border ${lifecycleColor(
+                        ev.status
+                      )}`}
+                    >
+                      {lifecycleLabel(ev.status)}
+                    </span>
+                  </div>
+                  <p className="text-gray-300">{ev.reason}</p>
+                </li>
+              ))}
+            </ul>
+          </Section>
+        )}
+
         <p className="text-xs text-gray-600 mt-6 border-t border-border pt-4">
           {plan.disclaimer}
         </p>
@@ -148,41 +186,47 @@ function Section({ title, children }: { title: string; children: React.ReactNode
   );
 }
 
-const SCORE_ROWS: { key: keyof ScoreBreakdown; label: string; max: number }[] = [
+const SCORE_ROWS: {
+  key: keyof ScoreBreakdown;
+  label: string;
+  max: number;
+  signed?: boolean;
+}[] = [
   { key: "trend", label: "Trend", max: 25 },
   { key: "momentum", label: "Momentum", max: 15 },
   { key: "volume", label: "Volume", max: 10 },
   { key: "funding", label: "Funding", max: 10 },
   { key: "structure", label: "Market Structure", max: 15 },
   { key: "history", label: "History Match", max: 15 },
-  { key: "risk", label: "Risk Penalty", max: 0 },
+  { key: "regime", label: "Market Regime Fit", max: 5, signed: true },
+  { key: "risk", label: "Risk Penalty", max: 20, signed: true },
 ];
 
 function ScoreBars({ breakdown }: { breakdown: ScoreBreakdown }) {
   return (
     <div className="space-y-2">
-      {SCORE_ROWS.map(({ key, label, max }) => {
+      {SCORE_ROWS.map(({ key, label, max, signed }) => {
         const value = breakdown[key];
-        const isPenalty = key === "risk";
-        const denom = isPenalty ? 20 : max;
-        const pct = Math.min(100, (Math.abs(value) / denom) * 100);
+        const pct = max > 0 ? Math.min(100, (Math.abs(value) / max) * 100) : 0;
+        const isNegative = value < 0;
+        const display = signed ? `${value > 0 ? "+" : ""}${value}` : `${value}/${max}`;
         return (
           <div key={key} className="flex items-center gap-3 text-sm">
-            <div className="w-32 text-gray-400 shrink-0">{label}</div>
+            <div className="w-36 text-gray-400 shrink-0">{label}</div>
             <div className="flex-1 h-2 rounded bg-border overflow-hidden">
               <div
-                className={isPenalty ? "h-full bg-bear" : "h-full bg-bull"}
+                className={isNegative ? "h-full bg-bear" : "h-full bg-bull"}
                 style={{ width: `${pct}%` }}
               />
             </div>
-            <div className="w-10 text-right tabular-nums">{value}</div>
+            <div className="w-16 text-right tabular-nums">{display}</div>
           </div>
         );
       })}
       <div className="flex items-center gap-3 text-sm font-semibold pt-1 border-t border-border">
-        <div className="w-32 text-gray-300 shrink-0">Total</div>
+        <div className="w-36 text-gray-300 shrink-0">Total</div>
         <div className="flex-1" />
-        <div className="w-10 text-right tabular-nums">{breakdown.total}</div>
+        <div className="w-16 text-right tabular-nums">{breakdown.total}/100</div>
       </div>
     </div>
   );

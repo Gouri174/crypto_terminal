@@ -12,6 +12,7 @@ class ScoreBreakdown(BaseModel):
     funding: float
     structure: float
     history: float
+    regime: float
     risk: float
     total: float
 
@@ -28,6 +29,21 @@ class HistoryMatch(BaseModel):
     avg_drawdown_pct: float | None = None
     horizon_candles: int | None = None
     most_similar_return_pct: float | None = None
+
+
+class RegimeInfo(BaseModel):
+    """The overall market regime at the time this opportunity was scored —
+    see app/engine/market_regime.py. Computed from BTC's trend plus breadth
+    across the scanned universe, not asserted by the LLM."""
+
+    label: str  # "risk_on" | "risk_off" | "mixed"
+    trend: str  # "bullish" | "bearish" | "ranging" | "transitional"
+    confidence: int
+    btc_trend: str
+    breadth_bullish_pct: float
+    breadth_bearish_pct: float
+    universe_size: int
+    summary: str
 
 
 class TradePlan(BaseModel):
@@ -57,9 +73,18 @@ class TradePlan(BaseModel):
     )
 
 
+class LifecycleEvent(BaseModel):
+    at: int  # epoch ms
+    status: str
+    reason: str
+
+
 class Opportunity(BaseModel):
     symbol: str
     score: float
     last_price: float
     change_24h_pct: float
     trade_plan: TradePlan
+    lifecycle_status: str = "WAIT"
+    lifecycle_history: list[LifecycleEvent] = []
+    regime: RegimeInfo | None = None
