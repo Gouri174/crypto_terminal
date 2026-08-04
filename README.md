@@ -58,18 +58,36 @@ computed score, not parsed from what Claude claims it is.
   "Grammar compilation timed out" error on this schema during testing).
 - **Storage**: SQLAlchemy, SQLite by default (zero extra infra), swap to
   Postgres by setting `DATABASE_URL` — no code changes needed.
-- **Frontend**: Next.js dashboard with ranked opportunity cards; the detail
-  page renders the score breakdown as bars and the historical-match stats,
-  not just prose.
+- **Continuous background engine** (`app/engine/background_scanner.py`):
+  runs as a single in-process asyncio loop (no Celery/Redis needed for this
+  phase — see below), started at app startup. Every `SCAN_INTERVAL_SECONDS`
+  (default 300s) it recomputes score + features for the whole universe —
+  cheap, no LLM involved — and persists it, so the dashboard is already
+  analyzed the moment someone opens it. Claude is only called for symbols
+  that are top-ranked **and** (never explained yet, OR score moved by
+  `LLM_SCORE_CHANGE_THRESHOLD`, OR the last explanation is older than
+  `LLM_MAX_AGE_SECONDS`) — this is what keeps LLM spend bounded regardless
+  of universe size, instead of scaling with (coins × minutes). A
+  `POST /api/opportunities`-serving `GET` reads this cached state directly;
+  it does not trigger a live scan itself.
+- **Live push** (`app/ws.py`, `GET /ws/opportunities`): a lightweight
+  WebSocket notifies the frontend when a scan cycle finishes, so the
+  dashboard refreshes automatically (with auto-reconnect) instead of
+  polling. The frontend re-fetches via the normal REST call on that signal
+  rather than trusting a pushed payload — simple, hard to get out of sync.
+- **Frontend**: Next.js dashboard with ranked opportunity cards and a live
+  indicator; the detail page renders the score breakdown as bars and the
+  historical-match stats, not just prose.
 
 ## Roadmap — what's NOT implemented yet, and why
 
 This follows a phased build rather than attempting everything at once:
 
-- **Continuous background engine.** Right now analysis runs on-demand (an
-  HTTP request triggers a live scan). "Every minute, automatically" needs a
-  background worker + scheduler running independently of any request — a
-  real architecture change, planned next.
+- **A real worker queue (Celery/Redis).** The current single-process
+  asyncio loop satisfies "always analyzed, not on-click" without extra
+  infra, but doesn't horizontally scale past one process and doesn't
+  survive a process restart mid-cycle gracefully. Worth adding once running
+  more than one backend instance.
 - **More exchanges** (Bybit, OKX, Hyperliquid, Coinbase, Kraken, Bitget) —
   same pattern as Binance, additive, not yet built.
 - **Order flow** (order book depth, CVD, liquidation clusters) — needs

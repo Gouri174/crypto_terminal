@@ -17,3 +17,35 @@ export async function fetchAnalysis(symbol: string): Promise<Opportunity> {
   if (!res.ok) throw new Error(`Failed to fetch analysis for ${symbol}: ${res.status}`);
   return res.json();
 }
+
+/**
+ * Opens a websocket to the background scanner and calls onUpdate() whenever
+ * it broadcasts that a scan cycle finished — the caller re-fetches via the
+ * REST endpoint rather than trusting a pushed payload, keeping this dumb
+ * and hard to get out of sync. Auto-reconnects on drop. Returns a cleanup
+ * function.
+ */
+export function subscribeToScannerUpdates(onUpdate: () => void): () => void {
+  const wsUrl = `${API_BASE_URL.replace(/^http/, "ws")}/ws/opportunities`;
+  let socket: WebSocket | null = null;
+  let reconnectTimer: ReturnType<typeof setTimeout> | null = null;
+  let stopped = false;
+
+  const connect = () => {
+    if (stopped) return;
+    socket = new WebSocket(wsUrl);
+    socket.onmessage = () => onUpdate();
+    socket.onclose = () => {
+      if (!stopped) reconnectTimer = setTimeout(connect, 5000);
+    };
+    socket.onerror = () => socket?.close();
+  };
+
+  connect();
+
+  return () => {
+    stopped = true;
+    if (reconnectTimer) clearTimeout(reconnectTimer);
+    socket?.close();
+  };
+}

@@ -1,4 +1,4 @@
-from sqlalchemy import Boolean, Float, Index, Integer, String, UniqueConstraint
+from sqlalchemy import JSON, Boolean, Float, Index, Integer, String, UniqueConstraint
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.db import Base
@@ -68,3 +68,30 @@ class MarketSnapshot(Base):
     forward_return_pct: Mapped[float | None] = mapped_column(Float, nullable=True)
     forward_max_drawdown_pct: Mapped[float | None] = mapped_column(Float, nullable=True)
     forward_horizon_candles: Mapped[int | None] = mapped_column(Integer, nullable=True)
+
+
+class LiveOpportunity(Base):
+    """The background scanner's always-current state for one symbol.
+
+    Deterministic score + raw features are recomputed and overwritten every
+    scan cycle for the whole universe (cheap, no LLM call). trade_plan is
+    only refreshed when the symbol is highly ranked or its score has moved
+    enough to matter — that's the expensive Claude call, rate-limited by
+    design so continuous scanning doesn't mean continuous LLM spend.
+    """
+
+    __tablename__ = "live_opportunities"
+
+    symbol: Mapped[str] = mapped_column(String(20), primary_key=True)
+    updated_at: Mapped[int] = mapped_column(Integer)  # epoch ms, last scan cycle
+    last_price: Mapped[float] = mapped_column(Float)
+    change_24h_pct: Mapped[float] = mapped_column(Float, default=0.0)
+
+    score_total: Mapped[float] = mapped_column(Float)
+    score_breakdown: Mapped[dict] = mapped_column(JSON)
+    features: Mapped[dict] = mapped_column(JSON)
+    history_match: Mapped[dict | None] = mapped_column(JSON, nullable=True)
+
+    trade_plan: Mapped[dict | None] = mapped_column(JSON, nullable=True)
+    trade_plan_updated_at: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    last_llm_score: Mapped[float | None] = mapped_column(Float, nullable=True)

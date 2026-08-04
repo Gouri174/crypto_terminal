@@ -1,74 +1,51 @@
-import asyncio
-
 from fastapi import APIRouter, Query
+from sqlalchemy import select
 
-from app.config import LLM_CANDIDATES, UNIVERSE_SIZE
-from app.data_sources import binance
-from app.engine.feature_builder import build_features
-from app.engine.reasoning import analyze_symbol
-from app.engine.scoring import score_opportunity
-from app.engine.similarity import build_current_vector, find_similar
+from app.config import LLM_CANDIDATES
+from app.db import SessionLocal
+from app.engine.background_scanner import ensure_scanned
+from app.models.db_models import LiveOpportunity
 from app.models.schemas import Opportunity
 
 router = APIRouter()
 
-SIMILARITY_INTERVAL = "4h"
-
-
-def _score_candidate(features: dict) -> tuple[float, dict, dict | None]:
-    history_stats = None
-    ind_4h = features.get(f"indicators_{SIMILARITY_INTERVAL}")
-    if ind_4h:
-        current_vec = build_current_vector(ind_4h)
-        history_stats = find_similar(features["symbol"], SIMILARITY_INTERVAL, current_vec)
-
-    breakdown = score_opportunity(features, history_stats)
-    return breakdown["total"], breakdown, history_stats
-
 
 @router.get("/opportunities", response_model=list[Opportunity])
 async def get_opportunities(limit: int = Query(default=6, le=LLM_CANDIDATES)):
-    tickers = await binance.get_24h_tickers()
+    """Reads the background scanner's latest cached state — fast, and
+    doesn't trigger any Claude calls itself. If the scanner hasn't
+    completed a cycle yet (fresh start), runs one bootstrap scan so the
+    dashboard isn't empty."""
+    rows = _load_top(limit)
 
-    usdt_pairs = [t for t in tickers if t["symbol"].endswith("USDT")]
-    usdt_pairs.sort(key=lambda t: float(t["quoteVolume"]), reverse=True)
-    universe = usdt_pairs[:UNIVERSE_SIZE]
+    if not rows:
+        await ensure_scanned()
+        rows = _load_top(limit)
 
-    feature_sets = await asyncio.gather(
-        *(build_features(t["symbol"]) for t in universe),
-        return_exceptions=True,
-    )
-
-    scored = []
-    for ticker, features in zip(universe, feature_sets):
-        if isinstance(features, Exception):
-            continue
-        total, breakdown, history_stats = _score_candidate(features)
-        scored.append((total, breakdown, history_stats, ticker, features))
-
-    scored.sort(key=lambda x: x[0], reverse=True)
-    top = scored[:limit]
-
-    plans = await asyncio.gather(
-        *(
-            asyncio.to_thread(analyze_symbol, features, breakdown, history_stats)
-            for _, breakdown, history_stats, _, features in top
-        ),
-        return_exceptions=True,
-    )
-
-    opportunities = []
-    for (total, _, _, ticker, _), plan in zip(top, plans):
-        if isinstance(plan, Exception):
-            continue
-        opportunities.append(
-            Opportunity(
-                symbol=ticker["symbol"],
-                score=total,
-                last_price=float(ticker["lastPrice"]),
-                change_24h_pct=float(ticker["priceChangePercent"]),
-                trade_plan=plan,
-            )
+    return [
+        Opportunity(
+            symbol=row.symbol,
+            score=row.score_total,
+            last_price=row.last_price,
+            change_24h_pct=row.change_24h_pct,
+            trade_plan=row.trade_plan,
         )
+        for row in rows
+    ]
 
-    return opportunities
+
+def _load_top(limit: int) -> list[LiveOpportunity]:
+    session = SessionLocal()
+    try:
+        return (
+            session.execute(
+                select(LiveOpportunity)
+                .where(LiveOpportunity.trade_plan.is_not(None))
+                .order_by(LiveOpportunity.score_total.desc())
+                .limit(limit)
+            )
+            .scalars()
+            .all()
+        )
+    finally:
+        session.close()
