@@ -43,9 +43,17 @@ computed score, not parsed from what Claude claims it is.
   `POST /api/backfill/{symbol}?interval=4h&days=730`.
 - **Historical similarity search** (`app/engine/similarity.py`): given the
   current market state, finds the K nearest historical states of that same
-  symbol (standardized feature distance) and reports real win rate / mean /
-  median return / average drawdown from what actually happened — returns
-  `null` rather than a fabricated stat when there isn't enough history yet.
+  symbol (standardized feature distance) and reports what actually
+  happened — win rate, mean/median return, average drawdown, **multi-
+  horizon returns (1d/3d/7d, independently computed from stored OHLCV)**,
+  largest gain/loss, the **actual dates** of the closest matches, and a
+  computed **key-difference** line (the single feature where today
+  differs most from the matched group, in standard deviations — e.g. "RSI
+  is notably higher than these historical matches"). Real example from
+  BTCUSDT's own 4,162 stored candles: 1d +0.26%, 3d +0.80%, **7d −1.80%**
+  — the multi-horizon view surfaced a real reversal the single-number
+  version would have hidden. Returns `null` rather than a fabricated stat
+  when there isn't enough history yet.
 - **Deterministic scoring model** (`app/engine/scoring.py`): a fixed,
   documented weighted formula (trend, momentum, volume, funding, structure,
   history match, risk penalty) — this is the confidence score. Claude
@@ -124,17 +132,12 @@ computed score, not parsed from what Claude claims it is.
 
 This follows a phased build rather than attempting everything at once:
 
-- **Richer historical similarity visualization** — not started. Currently
-  returns a single fixed horizon (win rate / mean / median / avg drawdown
-  at ~3 days). Planned: multi-horizon returns (1d/3d/7d, computed from
-  already-stored OHLCV — no new data source needed), largest gain/loss,
-  the actual dates of the closest matches, and a deterministic "key
-  difference" line (e.g. comparing today's RSI/funding to the matched
-  group's average). Also matches on technical indicators only today
-  (RSI/MACD/BB/ATR/ADX/StochRSI/OBV/CMF/MFI); adding funding-rate history
-  as a matching dimension is straightforward (Binance's funding-rate
-  history endpoint is free), open-interest history is not (Binance only
-  retains ~30 days for free).
+- **Funding/OI as similarity dimensions** — historical similarity currently
+  matches on technical indicators only (RSI/MACD/BB/ATR/ADX/StochRSI/OBV/
+  CMF/MFI). Adding funding-rate history is straightforward (Binance's
+  funding-rate history endpoint is free); open-interest history is not
+  (Binance only retains ~30 days for free), so that dimension would need a
+  different source or would stay indicator-only.
 - **More chart overlays** — support/resistance (the swing-point data
   already exists in `smart_money.py`, just not surfaced on the chart yet),
   trendlines, liquidity zones, and volume profile are not built. Volume

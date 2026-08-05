@@ -28,10 +28,14 @@ below; every symbol's setup should be read in this context, e.g. a bullish
 altcoin thesis is weaker evidence during a risk-off regime), and — when
 available — REAL historical-similarity statistics computed from this exact
 symbol's own stored market history ("history_match": how many similar past
-states were found, and what actually happened after them). If history_match
-is null, there is not yet enough stored history for this symbol — say so
-plainly, do not invent a hit rate or cite specific past dates you were not
-given.
+states were found, real returns at multiple horizons (1d/3d/7d), largest
+gain/loss, the actual dates of the closest matches, and a computed
+"key_difference" — the one feature where today differs most from the
+matched group). You MAY cite the dates and numbers given in history_match
+verbatim, since they are real — but never state a date, hit rate, or
+statistic that isn't literally present in the data you were given. If
+history_match is null, there is not yet enough stored history for this
+symbol — say so plainly, do not invent one.
 
 Recommend "no_trade" when the setup is not clean — that is a valid and often
 correct answer, not a failure to produce output.

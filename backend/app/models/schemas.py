@@ -17,6 +17,12 @@ class ScoreBreakdown(BaseModel):
     total: float
 
 
+class HorizonReturn(BaseModel):
+    horizon: str  # "1d" | "3d" | "7d"
+    mean_return_pct: float
+    sample_size: int
+
+
 class HistoryMatch(BaseModel):
     """Real statistics from actual stored historical snapshots for this
     symbol — not a fabricated hit rate. See app/engine/similarity.py."""
@@ -29,6 +35,11 @@ class HistoryMatch(BaseModel):
     avg_drawdown_pct: float | None = None
     horizon_candles: int | None = None
     most_similar_return_pct: float | None = None
+    largest_gain_pct: float | None = None
+    largest_loss_pct: float | None = None
+    most_similar_dates: list[str] = []
+    horizon_returns: list[HorizonReturn] = []
+    key_difference: str | None = None
 
 
 class RegimeInfo(BaseModel):

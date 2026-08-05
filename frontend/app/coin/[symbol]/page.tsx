@@ -241,14 +241,61 @@ function HistoryMatchCard({
   match: NonNullable<import("@/lib/types").TradePlan["history_match"]>;
 }) {
   return (
-    <div className="grid grid-cols-2 sm:grid-cols-3 gap-4 text-sm">
-      <Field label="Similar situations found" value={match.sample_size} />
-      <Field label="Of history available" value={match.total_history_available} />
-      <Field label="Win rate" value={`${match.win_rate}%`} />
-      <Field label="Mean return" value={`${match.mean_return_pct}%`} />
-      <Field label="Median return" value={`${match.median_return_pct}%`} />
-      {match.avg_drawdown_pct != null && (
-        <Field label="Avg drawdown" value={`${match.avg_drawdown_pct}%`} />
+    <div className="space-y-4">
+      <div className="grid grid-cols-2 sm:grid-cols-3 gap-4 text-sm">
+        <Field label="Similar situations found" value={match.sample_size} />
+        <Field label="Of history available" value={match.total_history_available} />
+        <Field label="Win rate" value={`${match.win_rate}%`} />
+        {match.largest_gain_pct != null && (
+          <Field label="Largest gain" value={`+${match.largest_gain_pct}%`} />
+        )}
+        {match.largest_loss_pct != null && (
+          <Field label="Largest loss" value={`${match.largest_loss_pct}%`} />
+        )}
+        {match.avg_drawdown_pct != null && (
+          <Field label="Avg drawdown" value={`${match.avg_drawdown_pct}%`} />
+        )}
+      </div>
+
+      {match.horizon_returns.length > 0 && (
+        <div>
+          <div className="text-gray-500 text-xs mb-1">Average return by horizon</div>
+          <div className="flex gap-4">
+            {match.horizon_returns.map((h) => (
+              <div key={h.horizon} className="text-sm">
+                <span className="text-gray-500">{h.horizon}: </span>
+                <span className={h.mean_return_pct >= 0 ? "text-bull" : "text-bear"}>
+                  {h.mean_return_pct >= 0 ? "+" : ""}
+                  {h.mean_return_pct}%
+                </span>
+                <span className="text-gray-600 text-xs"> (n={h.sample_size})</span>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+
+      {match.most_similar_dates.length > 0 && (
+        <div>
+          <div className="text-gray-500 text-xs mb-1">Most similar dates</div>
+          <div className="flex gap-2 flex-wrap">
+            {match.most_similar_dates.map((d) => (
+              <span
+                key={d}
+                className="text-xs px-2 py-1 rounded border border-border text-gray-300"
+              >
+                {d}
+              </span>
+            ))}
+          </div>
+        </div>
+      )}
+
+      {match.key_difference && (
+        <div>
+          <div className="text-gray-500 text-xs mb-1">Key difference</div>
+          <p className="text-sm text-gray-300">{match.key_difference}</p>
+        </div>
       )}
     </div>
   );

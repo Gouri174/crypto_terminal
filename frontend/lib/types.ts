@@ -10,6 +10,12 @@ export interface ScoreBreakdown {
   total: number;
 }
 
+export interface HorizonReturn {
+  horizon: string;
+  mean_return_pct: number;
+  sample_size: number;
+}
+
 export interface HistoryMatch {
   sample_size: number;
   total_history_available: number;
@@ -19,6 +25,11 @@ export interface HistoryMatch {
   avg_drawdown_pct: number | null;
   horizon_candles: number | null;
   most_similar_return_pct: number | null;
+  largest_gain_pct: number | null;
+  largest_loss_pct: number | null;
+  most_similar_dates: string[];
+  horizon_returns: HorizonReturn[];
+  key_difference: string | null;
 }
 
 export interface RegimeInfo {
