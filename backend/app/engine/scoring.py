@@ -15,7 +15,10 @@ def _structure(features: dict, tf: str) -> dict:
 
 
 def score_opportunity(
-    features: dict, history_stats: dict | None, regime: dict | None = None
+    features: dict,
+    history_stats: dict | None,
+    regime: dict | None = None,
+    ml_prediction: dict | None = None,
 ) -> dict:
     trend = _trend_score(features)
     momentum = _momentum_score(features)
@@ -24,9 +27,10 @@ def score_opportunity(
     structure = _structure_score(features)
     history = _history_score(history_stats)
     regime_score = _regime_score(features, regime)
+    ml = _ml_score(ml_prediction)
     risk = _risk_penalty(features)
 
-    total = trend + momentum + volume + funding + structure + history + regime_score + risk
+    total = trend + momentum + volume + funding + structure + history + regime_score + ml + risk
     total = max(0.0, min(100.0, total))
 
     return {
@@ -37,6 +41,7 @@ def score_opportunity(
         "structure": structure,
         "history": history,
         "regime": regime_score,
+        "ml": ml,
         "risk": risk,
         "total": round(total, 1),
     }
@@ -143,6 +148,30 @@ def _regime_score(features: dict, regime: dict | None) -> float:
     if (regime_bullish and symbol_bearish) or (not regime_bullish and symbol_bullish):
         return -5.0
     return 0.0
+
+
+def _ml_score(ml_prediction: dict | None) -> float:
+    """From the trained XGBoost classifiers (see ml_model.py) — Claude
+    explains this number, it doesn't set it. Zero when the models haven't
+    been trained yet or this symbol lacks enough history to predict on
+    (ml_model.py returns None rather than a guess in that case).
+
+    Deliberately low weight: as trained, these models show a real but weak
+    edge on held-out data (test AUC ~0.54 — see ml_model.py's docstring).
+    A weak-signal model shouldn't move the score as much as well-
+    established structural factors; this weight should only increase if a
+    retrain shows the models genuinely improving (check test_auc)."""
+    if not ml_prediction:
+        return 0.0
+    win_prob = ml_prediction.get("win_probability")
+    if win_prob is None:
+        return 0.0
+
+    score = (win_prob - 0.5) * 16  # range [-8, +8]
+    drawdown_prob = ml_prediction.get("large_drawdown_probability")
+    if drawdown_prob is not None:
+        score -= drawdown_prob * 4  # further penalty if a large adverse move looks likely
+    return round(max(-10.0, min(8.0, score)), 2)
 
 
 def _risk_penalty(features: dict) -> float:

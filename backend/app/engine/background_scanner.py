@@ -36,7 +36,7 @@ from app.config import (
 )
 from app.data_sources import binance
 from app.db import SessionLocal
-from app.engine import lifecycle, market_regime
+from app.engine import lifecycle, market_regime, ml_model
 from app.engine.feature_builder import build_features
 from app.engine.reasoning import analyze_symbol
 from app.engine.scoring import score_opportunity
@@ -122,25 +122,30 @@ async def _run_scan() -> dict:
     for ticker, features in zip(universe, feature_sets):
         if isinstance(features, Exception):
             continue
-        if ticker["symbol"] == "BTCUSDT":
+        symbol = ticker["symbol"]
+        if symbol == "BTCUSDT":
             btc_features = features
         history_stats = None
+        ml_prediction = None
         ind_4h = features.get(f"indicators_{SIMILARITY_INTERVAL}")
         if ind_4h:
             current_vec = build_current_vector(ind_4h)
-            history_stats = find_similar(ticker["symbol"], SIMILARITY_INTERVAL, current_vec)
-        breakdown = score_opportunity(features, history_stats, regime)
-        scored.append((breakdown["total"], breakdown, history_stats, ticker, features))
+            history_stats = find_similar(symbol, SIMILARITY_INTERVAL, current_vec)
+            ml_prediction = ml_model.predict_probabilities(
+                symbol, SIMILARITY_INTERVAL, ind_4h.get("last_close"), current_vec
+            )
+        breakdown = score_opportunity(features, history_stats, regime, ml_prediction)
+        scored.append((breakdown["total"], breakdown, history_stats, ml_prediction, ticker, features))
 
     scored.sort(key=lambda x: x[0], reverse=True)
     now_ms = int(time.time() * 1000)
     to_explain = _persist_scan(scored, now_ms)
 
     explained = 0
-    for symbol, features, breakdown, history_stats in to_explain:
+    for symbol, features, breakdown, history_stats, ml_prediction in to_explain:
         try:
             plan = await asyncio.to_thread(
-                analyze_symbol, features, breakdown, history_stats, regime
+                analyze_symbol, features, breakdown, history_stats, regime, ml_prediction
             )
         except Exception as exc:
             print(f"[scanner] Claude explanation failed for {symbol}: {exc}")
@@ -165,7 +170,7 @@ def _persist_scan(scored: list, now_ms: int) -> list:
             for row in session.execute(select(LiveOpportunity)).scalars().all()
         }
 
-        for rank, (total, breakdown, history_stats, ticker, features) in enumerate(scored):
+        for rank, (total, breakdown, history_stats, ml_prediction, ticker, features) in enumerate(scored):
             symbol = ticker["symbol"]
             row = existing.get(symbol)
             price = float(ticker["lastPrice"])
@@ -217,7 +222,7 @@ def _persist_scan(scored: list, now_ms: int) -> list:
             row.history_match = history_stats
 
             if needs_llm:
-                to_explain.append((symbol, features, breakdown, history_stats))
+                to_explain.append((symbol, features, breakdown, history_stats, ml_prediction))
 
         session.commit()
     finally:

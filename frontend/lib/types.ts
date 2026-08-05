@@ -6,8 +6,14 @@ export interface ScoreBreakdown {
   structure: number;
   history: number;
   regime: number;
+  ml: number;
   risk: number;
   total: number;
+}
+
+export interface MLPrediction {
+  win_probability: number;
+  large_drawdown_probability: number;
 }
 
 export interface HorizonReturn {
@@ -60,9 +66,14 @@ export interface TradePlan {
   reasons_against: string[];
   invalidation: string | null;
   historical_comparison: string | null;
+  bullish_scenario: string | null;
+  bearish_scenario: string | null;
+  biggest_risks: string[];
+  evidence_that_would_increase_confidence: string | null;
   summary: string;
   score_breakdown: ScoreBreakdown | null;
   history_match: HistoryMatch | null;
+  ml_prediction: MLPrediction | null;
   disclaimer: string;
 }
 

@@ -13,8 +13,20 @@ class ScoreBreakdown(BaseModel):
     structure: float
     history: float
     regime: float
+    ml: float
     risk: float
     total: float
+
+
+class MLPrediction(BaseModel):
+    """Output of the trained XGBoost classifiers (app/engine/ml_model.py) —
+    Claude explains these numbers, it doesn't produce them. Trained on
+    real backfilled outcomes, standardized per-symbol before pooling
+    across symbols so raw indicator scale differences (BTC vs a sub-$1
+    altcoin) don't bias the model."""
+
+    win_probability: float
+    large_drawdown_probability: float
 
 
 class HorizonReturn(BaseModel):
@@ -74,9 +86,14 @@ class TradePlan(BaseModel):
     reasons_against: list[str] = []
     invalidation: str | None = None
     historical_comparison: str | None = None
+    bullish_scenario: str | None = None
+    bearish_scenario: str | None = None
+    biggest_risks: list[str] = []
+    evidence_that_would_increase_confidence: str | None = None
     summary: str
     score_breakdown: ScoreBreakdown | None = None
     history_match: HistoryMatch | None = None
+    ml_prediction: MLPrediction | None = None
     disclaimer: str = (
         "This is an AI-generated analysis based on current market data, not a "
         "guarantee of future price movement. Not financial advice. Markets are "

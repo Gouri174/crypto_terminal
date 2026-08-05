@@ -4,6 +4,7 @@ from fastapi import APIRouter, HTTPException
 
 from app.data_sources import binance
 from app.db import SessionLocal
+from app.engine import ml_model
 from app.engine.background_scanner import load_current_regime
 from app.engine.feature_builder import build_features
 from app.engine.reasoning import analyze_symbol
@@ -30,14 +31,20 @@ async def analyze(symbol: str):
         raise HTTPException(404, f"Could not fetch data for {symbol}: {exc}") from exc
 
     history_stats = None
+    ml_prediction = None
     ind_4h = features.get(f"indicators_{SIMILARITY_INTERVAL}")
     if ind_4h:
         current_vec = build_current_vector(ind_4h)
         history_stats = find_similar(symbol, SIMILARITY_INTERVAL, current_vec)
+        ml_prediction = ml_model.predict_probabilities(
+            symbol, SIMILARITY_INTERVAL, ind_4h.get("last_close"), current_vec
+        )
 
     regime = load_current_regime()
-    score_breakdown = score_opportunity(features, history_stats, regime)
-    plan = await asyncio.to_thread(analyze_symbol, features, score_breakdown, history_stats, regime)
+    score_breakdown = score_opportunity(features, history_stats, regime, ml_prediction)
+    plan = await asyncio.to_thread(
+        analyze_symbol, features, score_breakdown, history_stats, regime, ml_prediction
+    )
 
     lifecycle_status, lifecycle_history = _read_lifecycle(symbol)
 

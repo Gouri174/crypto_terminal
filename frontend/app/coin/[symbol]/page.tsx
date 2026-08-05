@@ -117,6 +117,56 @@ export default function CoinDetailPage({
           </Section>
         )}
 
+        {(plan.bullish_scenario || plan.bearish_scenario) && (
+          <Section title="Scenarios">
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+              {plan.bullish_scenario && (
+                <div>
+                  <div className="text-bull text-xs uppercase font-semibold mb-1">Bullish</div>
+                  <p className="text-gray-300 text-sm">{plan.bullish_scenario}</p>
+                </div>
+              )}
+              {plan.bearish_scenario && (
+                <div>
+                  <div className="text-bear text-xs uppercase font-semibold mb-1">Bearish</div>
+                  <p className="text-gray-300 text-sm">{plan.bearish_scenario}</p>
+                </div>
+              )}
+            </div>
+          </Section>
+        )}
+
+        {plan.biggest_risks.length > 0 && (
+          <Section title="Biggest Risks">
+            <ul className="list-disc list-inside text-gray-300 space-y-1">
+              {plan.biggest_risks.map((r, i) => (
+                <li key={i}>{r}</li>
+              ))}
+            </ul>
+          </Section>
+        )}
+
+        {plan.ml_prediction && (
+          <Section title="ML Model Prediction">
+            <div className="grid grid-cols-2 gap-4 text-sm">
+              <Field
+                label="Win probability"
+                value={`${Math.round(plan.ml_prediction.win_probability * 100)}%`}
+              />
+              <Field
+                label="Large drawdown risk"
+                value={`${Math.round(plan.ml_prediction.large_drawdown_probability * 100)}%`}
+              />
+            </div>
+            <p className="text-xs text-gray-600 mt-2">
+              From gradient-boosted classifiers trained on this app&apos;s own
+              backfilled historical outcomes — a separate evidence source from
+              the historical-similarity search above, not the same
+              calculation twice.
+            </p>
+          </Section>
+        )}
+
         <Section title="Historical Similarity">
           {plan.history_match ? (
             <HistoryMatchCard match={plan.history_match} />
@@ -132,6 +182,12 @@ export default function CoinDetailPage({
             <p className="text-gray-300 mt-2">{plan.historical_comparison}</p>
           )}
         </Section>
+
+        {plan.evidence_that_would_increase_confidence && (
+          <Section title="What Would Change This">
+            <p className="text-gray-300">{plan.evidence_that_would_increase_confidence}</p>
+          </Section>
+        )}
 
         {data.lifecycle_history.length > 0 && (
           <Section title="Live Reasoning Timeline">
@@ -202,6 +258,7 @@ const SCORE_ROWS: {
   { key: "structure", label: "Market Structure", max: 15 },
   { key: "history", label: "History Match", max: 15 },
   { key: "regime", label: "Market Regime Fit", max: 5, signed: true },
+  { key: "ml", label: "ML Model", max: 10, signed: true },
   { key: "risk", label: "Risk Penalty", max: 20, signed: true },
 ];
 

@@ -54,16 +54,36 @@ computed score, not parsed from what Claude claims it is.
   — the multi-horizon view surfaced a real reversal the single-number
   version would have hidden. Returns `null` rather than a fabricated stat
   when there isn't enough history yet.
+- **ML probability layer** (`app/engine/ml_model.py`, `POST /api/train-ml`):
+  gradient-boosted classifiers (XGBoost) trained on the already-backfilled
+  historical snapshots to predict win probability and large-drawdown
+  probability, standardized per-symbol before pooling across symbols (a
+  MACD histogram of 150 means something completely different for BTC than
+  for a sub-$1 altcoin — pooling raw values would silently bias the model).
+  **Honest result, not oversold:** the first version (200 trees, depth 4)
+  hit 66% training accuracy but only 49.6% on held-out future data — *worse*
+  than the 50.1% base rate, i.e. it had memorized noise. Reduced to a
+  shallow, heavily-regularized model (50 trees, depth 2, strong L2) that
+  generalizes to a real but modest edge: **52.8% test accuracy vs 46.1%
+  baseline, test AUC 0.544** (0.5 = coin flip). Weighted low in the scoring
+  formula (±8 points, vs ±25 for trend) to match that weak-but-real signal
+  — and in live testing, Claude correctly read a near-coin-flip prediction
+  and flagged it as a risk ("a coin-flip with fat left tail; position size
+  accordingly") rather than treating it as strong evidence. Returns `null`
+  rather than a fabricated probability when models aren't trained yet or a
+  symbol lacks enough history.
 - **Deterministic scoring model** (`app/engine/scoring.py`): a fixed,
   documented weighted formula (trend, momentum, volume, funding, structure,
-  history match, risk penalty) — this is the confidence score. Claude
-  explains it; it cannot change it.
+  history match, regime fit, ML prediction, risk penalty) — this is the
+  confidence score. Claude explains it; it cannot change it.
 - **AI reasoning**: Claude (`claude-opus-5`) receives the computed score
-  breakdown and real historical-match stats and explains them — entry/stop/
-  targets, reasons for/against, and an explicit invalidation point. Requests
-  a JSON object directly in the prompt and parses it (rather than the
-  Anthropic API's `output_format`/structured-outputs feature, which hit a
-  "Grammar compilation timed out" error on this schema during testing).
+  breakdown, real historical-match stats, and ML predictions, and explains
+  them — entry/stop/targets, reasons for/against, an explicit invalidation
+  point, bullish/bearish scenarios, the biggest risks to the specific
+  setup, and what additional evidence would raise or lower confidence.
+  Requests a JSON object directly in the prompt and parses it (rather than
+  the Anthropic API's `output_format`/structured-outputs feature, which hit
+  a "Grammar compilation timed out" error on this schema during testing).
 - **Storage**: SQLAlchemy, SQLite by default (zero extra infra), swap to
   Postgres by setting `DATABASE_URL` — no code changes needed.
 - **Continuous background engine** (`app/engine/background_scanner.py`):
