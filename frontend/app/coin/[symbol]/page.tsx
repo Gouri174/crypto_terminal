@@ -6,6 +6,7 @@ import { fetchAnalysis } from "@/lib/api";
 import type { Opportunity, ScoreBreakdown } from "@/lib/types";
 import { lifecycleColor, lifecycleLabel } from "@/lib/lifecycle";
 import RegimeBanner from "@/components/RegimeBanner";
+import ChartPanel from "@/components/ChartPanel";
 
 export default function CoinDetailPage({
   params,
@@ -24,7 +25,7 @@ export default function CoinDetailPage({
 
   if (error) {
     return (
-      <main className="max-w-3xl mx-auto px-6 py-10">
+      <main className="max-w-5xl mx-auto px-6 py-10">
         <Link href="/" className="text-sm text-gray-400 hover:underline">
           ← Back
         </Link>
@@ -35,7 +36,7 @@ export default function CoinDetailPage({
 
   if (!data) {
     return (
-      <main className="max-w-3xl mx-auto px-6 py-10">
+      <main className="max-w-5xl mx-auto px-6 py-10">
         <div className="text-gray-500">Running full analysis for {symbol}…</div>
       </main>
     );
@@ -44,12 +45,14 @@ export default function CoinDetailPage({
   const { trade_plan: plan } = data;
 
   return (
-    <main className="max-w-3xl mx-auto px-6 py-10">
+    <main className="max-w-5xl mx-auto px-6 py-10">
       <Link href="/" className="text-sm text-gray-400 hover:underline">
         ← Back
       </Link>
 
       {data.regime && <div className="mt-4"><RegimeBanner regime={data.regime} /></div>}
+
+      <ChartPanel symbol={data.symbol} />
 
       <div className="rounded-lg border border-border bg-panel p-6">
         <div className="flex items-center justify-between mb-1">

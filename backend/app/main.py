@@ -6,7 +6,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from app.config import ALLOWED_ORIGINS, SCANNER_ENABLED
 from app.db import init_db
 from app.engine.background_scanner import run_scanner_loop
-from app.routes import analyze, ask, backfill, opportunities, regime, ws
+from app.routes import analyze, ask, backfill, chart, opportunities, regime, ws
 
 app = FastAPI(
     title="Crypto AI Terminal API",
@@ -28,6 +28,7 @@ app.include_router(analyze.router, prefix="/api")
 app.include_router(ask.router, prefix="/api")
 app.include_router(backfill.router, prefix="/api")
 app.include_router(regime.router, prefix="/api")
+app.include_router(chart.router, prefix="/api")
 app.include_router(ws.router)
 
 _scanner_task: asyncio.Task | None = None

@@ -96,17 +96,58 @@ computed score, not parsed from what Claude claims it is.
   indicator, a market-regime banner, and per-symbol lifecycle badges; the
   detail page renders the score breakdown as bars (component/max, e.g.
   "14.19/25"), the historical-match stats, and the lifecycle timeline.
+- **AI-annotated chart** (`app/engine/chart_data.py`, `GET /api/chart/{symbol}`,
+  `frontend/components/ChartPanel.tsx`): a real `lightweight-charts`
+  candlestick chart (TradingView's own open-source library — no paid
+  Charting Library license) with EMA20/50/200 overlays, price lines for the
+  entry zone/stop-loss/TP1/TP2, and markers for BOS/CHoCH/FVGs and detected
+  order blocks (the last opposite-colored candle before a structure break —
+  a standard heuristic, computed, not fetched). Every overlay is clickable
+  and shows a real explanation: trade-level clicks reuse Claude's actual
+  `reasons_for`/`reasons_against`/`invalidation` text verbatim; structure
+  markers get a deterministic, template-based description of what was
+  detected. **Deliberately no per-click LLM call** — that would reintroduce
+  uncontrolled cost exactly where the background-scanner design worked hard
+  to bound it. Verified end-to-end: real candle/EMA/marker/order-block data
+  reaches the frontend, and the click → explanation-panel interaction works
+  (tested live). **Known limitation of this dev session, not of the shipped
+  code:** the automated browser used to test this session doesn't composite
+  frames to a real display (confirmed directly — `requestAnimationFrame`-
+  driven canvas painting never executes, while everything synchronous, like
+  `chart.options()` and `series.data()`, reports correct values throughout).
+  That means the actual pixel rendering of the candlestick chart could not
+  be visually confirmed in this environment; every other layer (data
+  fetching, chart configuration, click interactivity) was. Open the app in
+  a normal browser to see the chart itself.
 
 ## Roadmap — what's NOT implemented yet, and why
 
 This follows a phased build rather than attempting everything at once:
 
-- **Richer historical similarity** — currently matches on technical
-  indicators only (RSI/MACD/BB/ATR/ADX/StochRSI/OBV/CMF/MFI). Adding
-  funding-rate history as a matching dimension is straightforward (Binance's
-  funding-rate history endpoint is free); open-interest history is not
-  (Binance only retains ~30 days for free), so that dimension would need a
-  different source or would stay indicator-only.
+- **Richer historical similarity visualization** — not started. Currently
+  returns a single fixed horizon (win rate / mean / median / avg drawdown
+  at ~3 days). Planned: multi-horizon returns (1d/3d/7d, computed from
+  already-stored OHLCV — no new data source needed), largest gain/loss,
+  the actual dates of the closest matches, and a deterministic "key
+  difference" line (e.g. comparing today's RSI/funding to the matched
+  group's average). Also matches on technical indicators only today
+  (RSI/MACD/BB/ATR/ADX/StochRSI/OBV/CMF/MFI); adding funding-rate history
+  as a matching dimension is straightforward (Binance's funding-rate
+  history endpoint is free), open-interest history is not (Binance only
+  retains ~30 days for free).
+- **More chart overlays** — support/resistance (the swing-point data
+  already exists in `smart_money.py`, just not surfaced on the chart yet),
+  trendlines, liquidity zones, and volume profile are not built. Volume
+  profile specifically needs tick/trade-level data to be honest, not just
+  OHLCV — approximating it from candle volume would be a real accuracy
+  compromise worth flagging if attempted.
+- **AI Replay** (reconstruct what the AI would have recommended at a past
+  candle, using only data available then) — not built. The pieces exist
+  (historical snapshots already store the full indicator/structure state
+  per past candle), but replaying it through Claude and presenting it as
+  an interactive "click a candle" feature is new work.
+- **Portfolio Mode** (multi-coin risk/correlation view, suggested
+  rebalancing) — not built.
 - **AI Journal** — the lifecycle engine already logs every WAIT→BUY→EXIT
   transition with a reason, which is the raw material for "trades with
   ADX>35 + neutral funding won 71%" style learning. Aggregating that into a

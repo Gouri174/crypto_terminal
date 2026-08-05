@@ -1,4 +1,5 @@
 import type { Opportunity } from "./types";
+import type { ChartData } from "./chart-types";
 
 const API_BASE_URL = process.env.NEXT_PUBLIC_API_BASE_URL || "http://localhost:8000";
 
@@ -15,6 +16,19 @@ export async function fetchAnalysis(symbol: string): Promise<Opportunity> {
     cache: "no-store",
   });
   if (!res.ok) throw new Error(`Failed to fetch analysis for ${symbol}: ${res.status}`);
+  return res.json();
+}
+
+export async function fetchChart(
+  symbol: string,
+  interval = "4h",
+  limit = 300
+): Promise<ChartData> {
+  const res = await fetch(
+    `${API_BASE_URL}/api/chart/${symbol}?interval=${interval}&limit=${limit}`,
+    { cache: "no-store" }
+  );
+  if (!res.ok) throw new Error(`Failed to fetch chart for ${symbol}: ${res.status}`);
   return res.json();
 }
 
