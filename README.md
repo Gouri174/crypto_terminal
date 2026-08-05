@@ -177,6 +177,63 @@ computed score, not parsed from what Claude claims it is.
   fetching, chart configuration, click interactivity) was. Open the app in
   a normal browser to see the chart itself.
 
+- **Closed-loop trade outcome tracking** (`app/models/db_models.py:TradeOutcome`,
+  `app/engine/trade_outcomes.py`, `app/engine/trade_reports.py`,
+  `GET /api/outcomes`, `GET /api/digest/{daily,weekly,monthly}`,
+  `GET /api/outcomes/correlations`): this is the piece that used to be
+  genuinely missing — nothing tracked whether the AI's own recommendations
+  were actually profitable. Every fresh Claude trade plan now becomes one
+  append-only `TradeOutcome` row: the full market state at the moment of
+  recommendation (every score component, ML probability, historical-match
+  stats, fear/greed, news/Reddit context, the reasoning text) plus entry/
+  stop/TP1-3. Nothing is fabricated after the fact — every field below is
+  read back from real price:
+  - **Lifecycle**: `pending` (issued, not yet entered) → `open` (price
+    entered the zone) → `closed_win` / `closed_loss` (hit the outermost
+    defined target or the stop) / `closed_stale` (never entered within 14
+    days) / `invalidated` (a materially different plan replaced it before
+    it resolved). Tracked every scan cycle from real price, not inferred.
+  - **MFE/MAE**: `max_runup_pct`/`max_drawdown_pct` record the best and
+    worst price actually reached while the position was open — so a trade
+    that "won" via TP1 but ran to +9% before pulling back shows that, not
+    just the +TP1% it closed at.
+  - **Post-mortem** (computed once, at close): `key_score_component` (the
+    score component with the largest absolute contribution to that trade's
+    score) and `explanation_mentioned_key_factor` (a keyword-match check —
+    intentionally simple, not NLP — of whether Claude's own reasoning text
+    referenced that component).
+  - **Counterfactual**: `counterfactual_return_pct` — what the exact
+    opposite direction would have returned over the identical entry-to-exit
+    price path. This is the honest, cheap version of "what if we'd gone
+    short instead," not a full independent simulation of the opposite
+    trade's own stop/target (see the docstring in `trade_outcomes.py` for
+    the exact limitation).
+  - **Reports**: `performance_digest()` (wins/losses, TP1/2/3 hit rate,
+    average return, profit factor, a simplified non-annualized Sharpe, and
+    equity-curve max drawdown) at daily/weekly/monthly windows, plus
+    `monthly_breakdown()` (best/worst coin and strategy, most-accurate
+    timeframe, best regime — each gated behind a minimum sample size so one
+    lucky/unlucky trade can't dominate the label) and `score_correlations()`
+    (mean score-component value among wins minus losses, gated behind 20
+    resolved trades — a diagnostic, not a significance test).
+  - **Verified live**: real Claude-issued plans (with a real `take_profit_3`
+    when the setup supports one — added to the schema/prompt alongside this
+    work) flow into this table during actual scan cycles; two positions
+    transitioned `pending` → `open` as real price entered their zones
+    between cycles during testing. Win/loss/close-path logic was verified
+    with simulated price ticks (`backend/test_trade_outcomes.py`) since real
+    trades take days to resolve — that script is honest about being a
+    manual verification script, not a pytest suite (there's no test infra
+    elsewhere in this project either).
+  - **Found and fixed while building this**: `market_regime.classify_regime`
+    had been silently crashing at the end of every scan cycle since
+    `ml_prediction` was added to the scanner's internal tuple earlier in the
+    project — a 5-value unpack against what had become a 6-tuple. It was
+    swallowed by the scan loop's broad `except Exception`, so it never
+    surfaced as a request-facing error, it just meant `MarketRegimeState`
+    had been stale for a while. Fixed; regime now updates every cycle again
+    (verified live — confirmed a fresh row write after the fix).
+
 ## Roadmap — what's NOT implemented yet, and why
 
 This follows a phased build rather than attempting everything at once:
@@ -200,11 +257,13 @@ This follows a phased build rather than attempting everything at once:
   an interactive "click a candle" feature is new work.
 - **Portfolio Mode** (multi-coin risk/correlation view, suggested
   rebalancing) — not built.
-- **AI Journal** — the lifecycle engine already logs every WAIT→BUY→EXIT
-  transition with a reason, which is the raw material for "trades with
-  ADX>35 + neutral funding won 71%" style learning. Aggregating that into a
-  journal with outcome statistics per condition is the next step, not yet
-  built.
+- **AI Journal UI** — the data side of this is now built (see
+  "Closed-loop trade outcome tracking" above): every recommendation is
+  logged with its full market state and real outcome, and
+  `GET /api/digest/{daily,weekly,monthly}` already compute "trades with
+  ADX>35 + neutral funding won 71%"-style aggregates. What's not built is a
+  frontend page to view them, and a scheduler to generate/store a digest
+  automatically at midnight rather than computing it on request.
 - **A real worker queue (Celery/Redis).** The current single-process
   asyncio loop satisfies "always analyzed, not on-click" without extra
   infra, but doesn't horizontally scale past one process and doesn't
@@ -216,6 +275,13 @@ This follows a phased build rather than attempting everything at once:
   Coinbase, Kraken, Bitget are not integrated at all. Deliberately
   deprioritized: more exchanges scanned independently increases coverage,
   not signal quality, at real added LLM/API cost.
+- **Multi-target ML, ranking instead of classifying, separate long/short
+  models, regime-specific models** — all genuinely higher-value than the
+  current single win/loss classifier, but all need volume of *resolved*
+  TradeOutcome rows to retrain on meaningfully (the current XGBoost models
+  were trained on backfilled candle history, not on this system's own
+  calls). Gated on time passing and the closed loop above accumulating
+  data, not on more engineering work right now.
 - **Order flow** (order book depth, CVD, liquidation clusters) — needs
   websocket order-book state tracking, a distinct engineering effort.
 - **On-chain data** (Glassnode/CryptoQuant/CoinMetrics-tier) — these are

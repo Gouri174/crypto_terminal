@@ -41,6 +41,7 @@ from app.engine.feature_builder import build_features
 from app.engine.reasoning import analyze_symbol
 from app.engine.scoring import score_opportunity
 from app.engine.similarity import build_current_vector, find_similar
+from app.engine.trade_outcomes import open_trade_outcome, update_open_trades
 from app.models.db_models import LiveOpportunity, MarketRegimeState
 from app.ws import broadcast_update
 
@@ -141,6 +142,11 @@ async def _run_scan() -> dict:
     now_ms = int(time.time() * 1000)
     to_explain = _persist_scan(scored, now_ms)
 
+    # Advance every open TradeOutcome against this cycle's real prices
+    # before issuing any new plans — see app/engine/trade_outcomes.py.
+    prices = {ticker["symbol"]: float(ticker["lastPrice"]) for ticker in universe}
+    update_open_trades(prices, now_ms)
+
     explained = 0
     for symbol, features, breakdown, history_stats, ml_prediction in to_explain:
         try:
@@ -151,6 +157,7 @@ async def _run_scan() -> dict:
             print(f"[scanner] Claude explanation failed for {symbol}: {exc}")
             continue
         _save_trade_plan(symbol, plan, breakdown["total"], now_ms)
+        open_trade_outcome(symbol, plan, breakdown, features, history_stats, ml_prediction, regime, now_ms)
         explained += 1
 
     new_regime = market_regime.classify_regime(btc_features, scored)

@@ -67,6 +67,7 @@ before or after it — matching exactly this shape:
   "stop_loss": number or null (with reasoning captured in "invalidation"),
   "take_profit_1": number or null,
   "take_profit_2": number or null,
+  "take_profit_3": number or null (a stretch target beyond TP2, only if the setup clearly supports one — null is fine and common),
   "risk_level": "low" | "medium" | "high",
   "time_horizon": "scalp" | "intraday" | "swing" | "position",
   "risk_reward": string or null,

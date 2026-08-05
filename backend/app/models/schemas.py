@@ -88,6 +88,7 @@ class TradePlan(BaseModel):
     stop_loss: float | None = None
     take_profit_1: float | None = None
     take_profit_2: float | None = None
+    take_profit_3: float | None = None
     risk_level: str  # "low" | "medium" | "high"
     time_horizon: str  # "scalp" | "intraday" | "swing" | "position"
     risk_reward: str | None = None

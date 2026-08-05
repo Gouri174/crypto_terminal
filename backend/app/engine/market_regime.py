@@ -10,12 +10,12 @@ beyond what the scanner already has, nothing invented.
 
 def classify_regime(btc_features: dict | None, scored: list) -> dict:
     """`scored` is the background scanner's list of
-    (total_score, score_breakdown, history_stats, ticker, features) tuples
-    for everything scanned this cycle."""
+    (total_score, score_breakdown, history_stats, ml_prediction, ticker,
+    features) tuples for everything scanned this cycle."""
     bullish = 0
     bearish = 0
     counted = 0
-    for _, _, _, _, features in scored:
+    for _, _, _, _, _, features in scored:
         ind = (features or {}).get("indicators_4h") or {}
         vote = ind.get("trend_vs_ema50")
         if vote == "above":

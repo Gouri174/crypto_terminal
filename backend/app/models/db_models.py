@@ -104,6 +104,107 @@ class LiveOpportunity(Base):
     lifecycle_history: Mapped[list] = mapped_column(JSON, default=list)
 
 
+class TradeOutcome(Base):
+    """One AI-generated trade recommendation and everything that happened to
+    it afterward. This is the closed-loop learning table: every resolved row
+    is a labeled training example (direction, full market state at
+    recommendation time, realized outcome) without any manual labeling step
+    — the label is just "what actually happened," read back from real price
+    data once time has passed. See app/engine/trade_outcomes.py.
+
+    Distinct from LiveOpportunity, which is overwritten every scan cycle and
+    only reflects the CURRENT state. This table is append-only: a row is
+    created once (when Claude issues a fresh trade plan) and only ever
+    updated in place until it resolves, never replaced.
+    """
+
+    __tablename__ = "trade_outcomes"
+    __table_args__ = (
+        Index("ix_outcome_symbol_status", "symbol", "status"),
+        Index("ix_outcome_created_at", "created_at"),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    created_at: Mapped[int] = mapped_column(Integer)  # epoch ms — when the plan was issued
+    symbol: Mapped[str] = mapped_column(String(20))
+    exchange: Mapped[str] = mapped_column(String(20), default="binance")
+    spot_or_futures: Mapped[str] = mapped_column(String(10), default="futures")
+    direction: Mapped[str] = mapped_column(String(10))  # "long" | "short"
+    timeframe: Mapped[str] = mapped_column(String(20))  # plan.time_horizon
+
+    # The plan as issued — never mutated after creation.
+    entry_low: Mapped[float] = mapped_column(Float)
+    entry_high: Mapped[float] = mapped_column(Float)
+    entry: Mapped[float] = mapped_column(Float)  # midpoint, for convenience
+    stop_loss: Mapped[float] = mapped_column(Float)
+    tp1: Mapped[float | None] = mapped_column(Float, nullable=True)
+    tp2: Mapped[float | None] = mapped_column(Float, nullable=True)
+    tp3: Mapped[float | None] = mapped_column(Float, nullable=True)
+
+    # Lifecycle, tracked by app/engine/trade_outcomes.py from live price —
+    # never inferred, never set by the LLM.
+    entry_hit: Mapped[bool] = mapped_column(Boolean, default=False)
+    tp1_hit: Mapped[bool] = mapped_column(Boolean, default=False)
+    tp2_hit: Mapped[bool] = mapped_column(Boolean, default=False)
+    tp3_hit: Mapped[bool] = mapped_column(Boolean, default=False)
+    stop_hit: Mapped[bool] = mapped_column(Boolean, default=False)
+    entry_time: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    exit_time: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    holding_minutes: Mapped[float | None] = mapped_column(Float, nullable=True)
+    # "pending" (not entered yet) -> "open" (entered) -> "closed_win" |
+    # "closed_loss" | "closed_stale" (never entered, expired) | "invalidated"
+    # (superseded by a new plan before resolving)
+    status: Mapped[str] = mapped_column(String(20), default="pending")
+
+    # The full market state at the moment the plan was issued — the
+    # "training example" input side. Mirrors ScoreBreakdown exactly so this
+    # table can be joined against future scoring-formula changes.
+    score: Mapped[float] = mapped_column(Float)
+    trend_score: Mapped[float] = mapped_column(Float, default=0.0)
+    momentum_score: Mapped[float] = mapped_column(Float, default=0.0)
+    volume_score: Mapped[float] = mapped_column(Float, default=0.0)
+    funding_score: Mapped[float] = mapped_column(Float, default=0.0)
+    structure_score: Mapped[float] = mapped_column(Float, default=0.0)
+    history_score: Mapped[float] = mapped_column(Float, default=0.0)
+    regime_score: Mapped[float] = mapped_column(Float, default=0.0)
+    ml_score: Mapped[float] = mapped_column(Float, default=0.0)
+    sentiment_score: Mapped[float] = mapped_column(Float, default=0.0)
+    liquidity_score: Mapped[float] = mapped_column(Float, default=0.0)
+    risk_score: Mapped[float] = mapped_column(Float, default=0.0)
+
+    ml_probability: Mapped[float | None] = mapped_column(Float, nullable=True)  # win_probability
+    historic_probability: Mapped[float | None] = mapped_column(Float, nullable=True)  # history win_rate/100
+    fear_greed: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    news_sentiment: Mapped[dict | None] = mapped_column(JSON, nullable=True)  # raw news_context blob
+    reddit_sentiment: Mapped[dict | None] = mapped_column(JSON, nullable=True)  # raw reddit context
+
+    reasoning: Mapped[str | None] = mapped_column(String(4000), nullable=True)  # plan.summary
+    reasons_for: Mapped[list] = mapped_column(JSON, default=list)
+    reasons_against: Mapped[list] = mapped_column(JSON, default=list)
+    historical_matches: Mapped[dict | None] = mapped_column(JSON, nullable=True)  # full history_stats
+    market_regime: Mapped[str | None] = mapped_column(String(20), nullable=True)  # regime label
+
+    # Realized outcome — only ever computed from real observed price,
+    # populated incrementally as price moves and finalized at close.
+    realized_return_pct: Mapped[float | None] = mapped_column(Float, nullable=True)
+    max_favorable_price: Mapped[float | None] = mapped_column(Float, nullable=True)  # MFE tracking
+    max_adverse_price: Mapped[float | None] = mapped_column(Float, nullable=True)  # MAE tracking
+    max_runup_pct: Mapped[float | None] = mapped_column(Float, nullable=True)  # MFE, % from entry
+    max_drawdown_pct: Mapped[float | None] = mapped_column(Float, nullable=True)  # MAE, % from entry
+
+    # Post-mortem — computed once at close, see trade_outcomes.py.
+    tp1_before_stop: Mapped[bool | None] = mapped_column(Boolean, nullable=True)
+    key_score_component: Mapped[str | None] = mapped_column(String(20), nullable=True)
+    explanation_mentioned_key_factor: Mapped[bool | None] = mapped_column(Boolean, nullable=True)
+
+    # Counterfactual — what the mirrored opposite-direction trade would have
+    # done over the same realized price path. See trade_outcomes.py for the
+    # simulation method and its honest limitations.
+    counterfactual_direction: Mapped[str | None] = mapped_column(String(10), nullable=True)
+    counterfactual_return_pct: Mapped[float | None] = mapped_column(Float, nullable=True)
+    counterfactual_note: Mapped[str | None] = mapped_column(String(500), nullable=True)
+
+
 class MarketRegimeState(Base):
     """The scanner's latest market-regime read (single row, id=1).
 
