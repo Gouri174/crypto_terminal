@@ -43,6 +43,12 @@ from sqlalchemy import select
 from app.db import SessionLocal
 from app.models.db_models import MarketSnapshot
 
+# Bump whenever the feature set or hyperparameters change materially —
+# recorded on every TradeOutcome row and in ml_models/metadata.json (see
+# retrain_if_better() in ml_retrain.py) so results can be separated by
+# which model version actually produced them.
+ML_MODEL_VERSION = "1.0"
+
 RAW_FEATURE_COLUMNS = ["rsi14", "bb_pct", "atr_pct", "adx14", "stoch_rsi", "cmf", "mfi"]
 # Scale-dependent on price/volume — normalize by price before standardizing
 # rather than using the raw stored value.
@@ -257,4 +263,5 @@ def predict_probabilities(
     return {
         "win_probability": round(win_prob, 3),
         "large_drawdown_probability": round(drawdown_prob, 3),
+        "model_version": ML_MODEL_VERSION,
     }

@@ -4,7 +4,7 @@ from fastapi import APIRouter, Query
 from sqlalchemy import select
 
 from app.db import SessionLocal
-from app.engine.trade_reports import monthly_breakdown, performance_digest, score_correlations
+from app.engine.trade_reports import feature_importance, monthly_breakdown, performance_digest
 from app.models.db_models import TradeOutcome
 
 router = APIRouter()
@@ -51,6 +51,9 @@ def _serialize(row: TradeOutcome) -> dict:
         "counterfactual_direction": row.counterfactual_direction,
         "counterfactual_return_pct": row.counterfactual_return_pct,
         "counterfactual_note": row.counterfactual_note,
+        "score_formula_version": row.score_formula_version,
+        "prompt_version": row.prompt_version,
+        "ml_model_version": row.ml_model_version,
     }
 
 
@@ -74,8 +77,13 @@ async def list_outcomes(
 
 
 @router.get("/outcomes/correlations")
-async def outcome_correlations():
-    return score_correlations()
+async def outcome_correlations(limit: int | None = Query(default=None, description="Only the N most recent resolved trades")):
+    """Which score components actually separate wins from losses — see
+    app/engine/trade_reports.py:feature_importance for the method and its
+    honest limits (not a significance test, gated behind a minimum sample
+    size). `limit` narrows to the most recent N resolved trades, e.g.
+    ?limit=100 for "what's mattered lately" instead of all-time."""
+    return feature_importance(limit=limit)
 
 
 @router.get("/digest/daily")

@@ -19,6 +19,8 @@ Two entry points, both called from background_scanner.py:
 from sqlalchemy import select
 
 from app.db import SessionLocal
+from app.engine.reasoning import PROMPT_VERSION
+from app.engine.scoring import SCORE_FORMULA_VERSION
 from app.models.db_models import TradeOutcome
 
 # A trade that never enters, or never resolves, within this window is
@@ -131,6 +133,9 @@ def open_trade_outcome(
             reasons_against=plan.reasons_against,
             historical_matches=history_stats,
             market_regime=(regime or {}).get("label"),
+            score_formula_version=SCORE_FORMULA_VERSION,
+            prompt_version=PROMPT_VERSION,
+            ml_model_version=(ml_prediction or {}).get("model_version"),
         )
         session.add(row)
         session.commit()

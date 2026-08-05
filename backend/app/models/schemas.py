@@ -37,6 +37,7 @@ class MLPrediction(BaseModel):
 
     win_probability: float
     large_drawdown_probability: float
+    model_version: str | None = None
 
 
 class HorizonReturn(BaseModel):

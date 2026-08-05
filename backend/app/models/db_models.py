@@ -204,6 +204,14 @@ class TradeOutcome(Base):
     counterfactual_return_pct: Mapped[float | None] = mapped_column(Float, nullable=True)
     counterfactual_note: Mapped[str | None] = mapped_column(String(500), nullable=True)
 
+    # Which version of each moving part produced this row — lets a future
+    # "did version X actually perform better" analysis separate results by
+    # what generated them, instead of silently pooling scores/prompts/
+    # models from different eras. See scoring.py, reasoning.py, ml_model.py.
+    score_formula_version: Mapped[str | None] = mapped_column(String(20), nullable=True)
+    prompt_version: Mapped[str | None] = mapped_column(String(20), nullable=True)
+    ml_model_version: Mapped[str | None] = mapped_column(String(20), nullable=True)
+
 
 class MarketRegimeState(Base):
     """The scanner's latest market-regime read (single row, id=1).

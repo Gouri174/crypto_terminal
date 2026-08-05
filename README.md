@@ -180,15 +180,73 @@ computed score, not parsed from what Claude claims it is.
     a documented near-miss rather than silently fixed, since it's the
     exact kind of regression a token-budget cut can cause without anyone
     noticing until a request actually fails.
-  - **Deliberately NOT done in this pass** (real trade-offs, not done
-    silently): batching multiple symbols into a single Claude call instead
-    of one call per symbol; further prompt summarization/shortening;
+  - **Batched Claude calls** (`app/engine/reasoning.py:analyze_batch`):
+    all of a scan cycle's `to_explain` symbols now go into ONE Claude call
+    (a JSON array response) instead of one call per symbol — cuts
+    round-trips and repeated system-prompt overhead. Each item still gets
+    its own precomputed direction/confidence/checklist/grade injected
+    exactly like the single-symbol path (`_finalize_plan()` is shared by
+    both, no duplicated logic). A malformed or missing item in the
+    response is skipped and logged, not treated as a whole-batch failure.
+    **Verified live**: real cycles produced a 2-symbol batch (SOL+QQQ) and
+    a 3-symbol batch (ZEC+EWY+SNDK) — the 3-symbol one's own reasoning
+    text for SNDK correctly said "the weakest of the three setups here,"
+    confirming Claude saw the batch as related items without the
+    reasoning cross-contaminating between symbols.
+  - **Adaptive explanation length**: grade (computed before Claude runs)
+    selects a FULL schema (thesis, scenarios, alternative-trade writeup)
+    for B+ and above, or a deliberately short one (1-2 items per list, no
+    thesis/scenarios) for C/Avoid — with a correspondingly smaller
+    `ANTHROPIC_MAX_TOKENS_SHORT` budget (700 vs 2500). Verified via the
+    mocked-response test; not yet observed live simply because no C/Avoid
+    setup has landed in the top-ranked explained set during live testing
+    — the code path is the same one the mock exercises, just not yet
+    seen with a real low-grade Claude response.
+  - **Deliberately NOT done in this pass**: further prompt
+    summarization/shortening beyond what adaptive length already gives;
     skipping Claude entirely for `no_trade`/low-grade setups (the existing
-    no_trade explanations are genuinely useful — e.g. explaining exactly
-    why a clean-looking trend is still not tradeable — and removing them
-    would be a real quality regression, not just a cost save); a manual
+    explanations are genuinely useful, not just a cost sink); a manual
     "regenerate" button on the frontend (the cache fix above already
     removes the reason one would be needed).
+- **Model/formula/prompt versioning**: `score_formula_version`
+  (`scoring.py`), `prompt_version` (`reasoning.py`), and `ml_model_version`
+  (`ml_model.py`) are recorded on every `TradeOutcome` row — added via a
+  generic auto-migration (see below) rather than a one-off manual fix, so
+  future version bumps just work. Exists so a future "did version 3.2
+  actually perform better than 3.1" analysis can separate results by what
+  produced them, instead of silently pooling scores from different eras.
+- **Auto-migrating additive schema changes** (`app/db.py:_sync_additive_columns`):
+  this project hit the "new nullable column doesn't exist on the old dev
+  DB" class of bug twice already (a cached JSON blob missing a key, and a
+  scanner tuple-shape mismatch). `init_db()` now walks every model's
+  columns after `create_all()` and `ALTER TABLE ADD COLUMN`s anything
+  missing — only ever adds, never drops or alters. **Verified live**: ran
+  against the existing dev DB with real `TradeOutcome` rows already in it;
+  added 3 new columns, all 7 existing rows stayed readable.
+- **Retrain-if-better safety wrapper** (`app/engine/ml_retrain.py`):
+  `ml_model.train_models()` always overwrote the deployed model files
+  immediately — fine for the first deploy, dangerous for every retrain
+  after. `retrain_if_better()` backs up the deployed files, retrains,
+  compares the candidate's test AUC against the previously-deployed
+  model's recorded metrics (`ml_models/metadata.json`), and rolls back to
+  the backup if the candidate is worse — never silently deploys a
+  regression. **Verified live with real data** (24,972 labeled snapshots):
+  tested all three paths — first deploy (no prior metadata), a genuine
+  regression correctly rejected and rolled back (confirmed via file hash
+  comparison that the model files were byte-identical to before the
+  attempt), and a genuine improvement correctly deployed. `POST
+  /api/train-ml` now uses this wrapper; the "deployed" field in its
+  response tells you whether the retrain actually took effect. No
+  automatic nightly scheduling — this app has no cron/scheduler infra, and
+  with current data volume a nightly retrain would mostly have nothing new
+  to learn from; wiring this to a clock is a separate, later addition.
+- **Feature importance / correlation reporting** (`GET /api/outcomes/correlations`,
+  `app/engine/trade_reports.py:feature_importance`): extended with
+  human-readable labels, sorted by absolute impact, and an optional
+  `?limit=N` to ask "what's mattered in the last N resolved trades"
+  instead of always all-time — useful as more data accumulates and older
+  scoring-formula eras shouldn't dilute a current read. Still gated behind
+  a minimum sample size and still explicitly not a significance test.
 - **Storage**: SQLAlchemy, SQLite by default (zero extra infra), swap to
   Postgres by setting `DATABASE_URL` — no code changes needed.
 - **Continuous background engine** (`app/engine/background_scanner.py`):

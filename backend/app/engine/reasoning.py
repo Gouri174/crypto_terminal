@@ -3,12 +3,20 @@ import re
 
 import anthropic
 
-from app.config import ANTHROPIC_MAX_TOKENS, ANTHROPIC_MODEL
+from app.config import ANTHROPIC_MAX_TOKENS, ANTHROPIC_MAX_TOKENS_SHORT, ANTHROPIC_MODEL
 from app.engine.confidence import compute_confidence
 from app.engine.decision import decide_direction, market_checklist, trade_grade
 from app.models.schemas import ConfidenceBreakdown, HistoryMatch, MLPrediction, ScoreBreakdown, TradePlan
 
 _client = anthropic.Anthropic()
+
+# Bump on any change to what Claude is asked to decide vs. explain, or to
+# the JSON contract — recorded on every TradeOutcome row. "2.0" marks the
+# decision-consistency rewrite: 1.x let Claude choose direction/confidence
+# itself, 2.x forces both from the deterministic engine. That's a real
+# behavioral discontinuity worth being able to separate results by, not a
+# cosmetic prompt tweak.
+PROMPT_VERSION = "2.0"
 
 SYSTEM_PROMPT = """You are an institutional crypto analyst — specifically,
 the head analyst reviewing output from a deterministic trading engine, not
@@ -83,9 +91,18 @@ a risk-off regime).
 this trade" — specific and actionable, not generic hedging.
 
 Always populate the `disclaimer` field with a plain-English reminder that
-this is not financial advice and no outcome is guaranteed."""
+this is not financial advice and no outcome is guaranteed.
 
-JSON_INSTRUCTIONS = """
+Adaptive length: `precomputed_grade` tells you which schema to fill in —
+you'll be given either the full analyst-report shape or a short one. On
+the short schema (low-grade setups), be brief on purpose: 1-2 items per
+list, 2-3 sentence summary. A low-conviction setup doesn't need the same
+depth of writeup as a high-conviction one — that's not a shortcut, it's
+matching effort to how much this particular call actually matters."""
+
+# Full schema: grade B+ and above — a setup worth the reader's full
+# attention gets the full analyst report.
+JSON_INSTRUCTIONS_FULL = """
 Respond with ONLY a single JSON object — no markdown code fences, no text
 before or after it — matching exactly this shape. Do NOT include
 "recommendation", "confidence", "checklist", or "grade" — those are fixed
@@ -117,7 +134,54 @@ by the engine and added by the caller, not written by you:
 }
 """
 
+# Short schema: grade C or below — a low-conviction (often no_trade) setup
+# still deserves a real reason, just not the full report. Deliberately
+# drops thesis/scenarios/alternative-trade — those are for setups worth
+# dwelling on.
+JSON_INSTRUCTIONS_SHORT = """
+Respond with ONLY a single JSON object — no markdown code fences, no text
+before or after it — matching exactly this shape (this is the SHORT form —
+see the adaptive length note above). Do NOT include "recommendation",
+"confidence", "checklist", or "grade":
+
+{
+  "entry_low": number or null,
+  "entry_high": number or null,
+  "stop_loss": number or null,
+  "take_profit_1": number or null,
+  "take_profit_2": number or null,
+  "take_profit_3": number or null,
+  "risk_level": "low" | "medium" | "high",
+  "time_horizon": "scalp" | "intraday" | "swing" | "position",
+  "reasons_for": [string, ...] (1-2 items, brief),
+  "reasons_against": [string, ...] (1-2 items, brief — why NOT to take this),
+  "invalidation": string or null,
+  "summary": string (2-3 sentences — why this scored low / isn't clean),
+  "disclaimer": string
+}
+"""
+
+# Appended to SYSTEM_PROMPT only for the batched call — everything above
+# still applies per-item; this just explains the array wrapper.
+BATCH_ADDENDUM = """
+
+BATCH MODE: you will receive `items`, an array where each element has its
+own precomputed_direction/confidence/checklist/grade/schema and market
+data — analyze each one independently using every rule above; do not let
+one symbol's setup influence another's reasoning. Respond with ONLY a
+single JSON ARRAY (no markdown fences, no text outside it), one object per
+item, in the same order you received them, and include a "symbol" field
+in every object matching that item's symbol so responses can be matched
+back reliably even if order isn't preserved. Each item's own `schema`
+field ("full" or "short") tells you which shape to fill in for that
+specific item — see the FULL and SHORT shapes below; add "symbol": string
+as an extra first field on whichever shape you use for that item.
+`market_regime_context` is given once, outside `items` — it's the same
+overall market regime for every item this cycle, not per-symbol."""
+
+_LOW_GRADES = {"C", "Avoid"}
 _JSON_BLOCK_RE = re.compile(r"\{.*\}", re.DOTALL)
+_JSON_ARRAY_RE = re.compile(r"\[.*\]", re.DOTALL)
 
 
 def build_user_prompt(
@@ -146,14 +210,53 @@ def build_user_prompt(
         "ml_prediction": ml_prediction,
         "alternative_candidate": alternative,
     }
+    instructions = JSON_INSTRUCTIONS_SHORT if grade in _LOW_GRADES else JSON_INSTRUCTIONS_FULL
     return (
         "Analyze this futures pair and produce a trade plan explaining the "
         "engine's decision. The direction and confidence below are fixed "
         "and final; explain them, don't recompute or override them.\n\n"
         + json.dumps(payload, indent=2, default=str)
         + "\n\n"
-        + JSON_INSTRUCTIONS
+        + instructions
     )
+
+
+def _precompute(symbol, features, breakdown, history_stats, ml_prediction, alternative) -> dict:
+    direction = decide_direction(features, breakdown)
+    confidence_data = compute_confidence(direction, breakdown, features, history_stats, ml_prediction)
+    checklist = market_checklist(breakdown, history_stats)
+    grade = trade_grade(confidence_data["confidence"])
+    return {
+        "symbol": symbol, "features": features, "breakdown": breakdown,
+        "history_stats": history_stats, "ml_prediction": ml_prediction, "alternative": alternative,
+        "direction": direction, "confidence_data": confidence_data, "checklist": checklist, "grade": grade,
+        "schema": "short" if grade in _LOW_GRADES else "full",
+    }
+
+
+def _finalize_plan(data: dict, pre: dict) -> TradePlan:
+    """Shared by the single-symbol and batched paths. Direction, confidence,
+    checklist, and grade are never taken from the model's own JSON — always
+    injected here from the precomputed values it was told to explain."""
+    data = dict(data)
+    data["symbol"] = pre["symbol"]
+    data["recommendation"] = pre["direction"]
+    data["confidence"] = pre["confidence_data"]["confidence"]
+    data["checklist"] = pre["checklist"]
+    data["grade"] = pre["grade"]
+
+    alt_reason = data.pop("alternative_trade_reason", None)
+    alternative = pre["alternative"]
+    data["alternative_trade"] = (
+        {"symbol": alternative["symbol"], "reason": alt_reason} if (alternative and alt_reason) else None
+    )
+
+    plan = TradePlan.model_validate(data)
+    plan.confidence_breakdown = ConfidenceBreakdown(**pre["confidence_data"])
+    plan.score_breakdown = ScoreBreakdown(**pre["breakdown"])
+    plan.history_match = HistoryMatch(**pre["history_stats"]) if pre["history_stats"] else None
+    plan.ml_prediction = MLPrediction(**pre["ml_prediction"]) if pre["ml_prediction"] else None
+    return plan
 
 
 def analyze_symbol(
@@ -164,14 +267,12 @@ def analyze_symbol(
     ml_prediction: dict | None = None,
     alternative: dict | None = None,
 ) -> TradePlan:
-    direction = decide_direction(features, score_breakdown)
-    confidence_data = compute_confidence(direction, score_breakdown, features, history_stats, ml_prediction)
-    checklist = market_checklist(score_breakdown, history_stats)
-    grade = trade_grade(confidence_data["confidence"])
+    pre = _precompute(features["symbol"], features, score_breakdown, history_stats, ml_prediction, alternative)
 
+    max_tokens = ANTHROPIC_MAX_TOKENS_SHORT if pre["grade"] in _LOW_GRADES else ANTHROPIC_MAX_TOKENS
     response = _client.messages.create(
         model=ANTHROPIC_MODEL,
-        max_tokens=ANTHROPIC_MAX_TOKENS,
+        max_tokens=max_tokens,
         # Disabled so the full max_tokens budget goes to the JSON answer
         # itself rather than being shared with thinking tokens.
         thinking={"type": "disabled"},
@@ -181,7 +282,7 @@ def analyze_symbol(
                 "role": "user",
                 "content": build_user_prompt(
                     features, score_breakdown, history_stats, regime, ml_prediction,
-                    direction, confidence_data, checklist, grade, alternative,
+                    pre["direction"], pre["confidence_data"], pre["checklist"], pre["grade"], alternative,
                 ),
             }
         ],
@@ -192,25 +293,94 @@ def analyze_symbol(
         raise ValueError(f"No JSON object found in model response: {text[:500]!r}")
 
     data = json.loads(match.group(0))
-    # Direction, confidence, checklist, and grade are never taken from the
-    # model's own JSON — they're injected here from the precomputed values
-    # it was told to explain, exactly like score_breakdown/history_match
-    # below.
-    data["symbol"] = features["symbol"]
-    data["recommendation"] = direction
-    data["confidence"] = confidence_data["confidence"]
-    data["checklist"] = checklist
-    data["grade"] = grade
+    return _finalize_plan(data, pre)
 
-    alt_reason = data.pop("alternative_trade_reason", None)
-    data["alternative_trade"] = (
-        {"symbol": alternative["symbol"], "reason": alt_reason} if (alternative and alt_reason) else None
+
+# Batch calls are capped rather than letting the budget grow unbounded with
+# more symbols — a genuinely huge batch should split into two calls, not
+# one call asking for an enormous single response.
+BATCH_MAX_TOKENS_CAP = 8000
+
+
+def build_batch_user_prompt(pre_items: list[dict], regime: dict | None) -> str:
+    items_payload = [
+        {
+            "symbol": pre["symbol"],
+            "schema": pre["schema"],
+            "market_data": pre["features"],
+            "precomputed_score": pre["breakdown"],
+            "precomputed_direction": pre["direction"],
+            "precomputed_confidence": pre["confidence_data"]["confidence"],
+            "confidence_components": pre["confidence_data"]["components"],
+            "confidence_penalties": pre["confidence_data"]["penalties"],
+            "precomputed_checklist": pre["checklist"],
+            "precomputed_grade": pre["grade"],
+            "history_match": pre["history_stats"],
+            "ml_prediction": pre["ml_prediction"],
+            "alternative_candidate": pre["alternative"],
+        }
+        for pre in pre_items
+    ]
+    return (
+        "Analyze each of these futures pairs and produce a trade plan "
+        "explaining the engine's decision for each. Direction and "
+        "confidence are fixed per item; explain them, don't recompute or "
+        "override them. market_regime_context applies to every item below "
+        "— they're all from the same scan cycle.\n\n"
+        + json.dumps({"market_regime_context": regime, "items": items_payload}, indent=2, default=str)
+        + "\n\nFULL shape:\n" + JSON_INSTRUCTIONS_FULL
+        + "\nSHORT shape:\n" + JSON_INSTRUCTIONS_SHORT
     )
 
-    plan = TradePlan.model_validate(data)
-    plan.confidence_breakdown = ConfidenceBreakdown(**confidence_data)
-    plan.score_breakdown = ScoreBreakdown(**score_breakdown)
-    plan.history_match = HistoryMatch(**history_stats) if history_stats else None
-    plan.ml_prediction = MLPrediction(**ml_prediction) if ml_prediction else None
 
-    return plan
+def analyze_batch(items: list[dict], regime: dict | None = None) -> dict[str, TradePlan]:
+    """items: list of dicts with keys symbol, features, breakdown,
+    history_stats, ml_prediction, alternative — regime is shared across the
+    whole batch (same scan cycle). One Claude call covers all of them,
+    cutting round-trips and repeated system-prompt overhead vs. one call
+    per symbol. Returns {symbol: TradePlan} only for symbols that parsed
+    successfully — a malformed or missing item in the response is skipped
+    and logged, not treated as a whole-batch failure."""
+    if not items:
+        return {}
+
+    pre_items = [
+        _precompute(it["symbol"], it["features"], it["breakdown"], it["history_stats"],
+                    it["ml_prediction"], it["alternative"])
+        for it in items
+    ]
+    budget = sum(ANTHROPIC_MAX_TOKENS_SHORT if p["grade"] in _LOW_GRADES else ANTHROPIC_MAX_TOKENS for p in pre_items)
+    max_tokens = min(budget, BATCH_MAX_TOKENS_CAP)
+
+    response = _client.messages.create(
+        model=ANTHROPIC_MODEL,
+        max_tokens=max_tokens,
+        thinking={"type": "disabled"},
+        system=SYSTEM_PROMPT + BATCH_ADDENDUM,
+        messages=[{"role": "user", "content": build_batch_user_prompt(pre_items, regime)}],
+    )
+    text = next((b.text for b in response.content if b.type == "text"), "")
+    match = _JSON_ARRAY_RE.search(text)
+    if not match:
+        raise ValueError(f"No JSON array found in batch model response: {text[:500]!r}")
+    raw_items = json.loads(match.group(0))
+
+    by_symbol = {p["symbol"]: p for p in pre_items}
+    results: dict[str, TradePlan] = {}
+    for raw in raw_items:
+        symbol = raw.get("symbol")
+        pre = by_symbol.get(symbol)
+        if pre is None:
+            print(f"[reasoning] batch response included unrecognized symbol {symbol!r}, skipping")
+            continue
+        try:
+            results[symbol] = _finalize_plan(raw, pre)
+        except Exception as exc:
+            print(f"[reasoning] failed to finalize batched plan for {symbol}: {exc}")
+            continue
+
+    missing = set(by_symbol) - set(results)
+    if missing:
+        print(f"[reasoning] batch response missing symbols: {sorted(missing)}")
+
+    return results

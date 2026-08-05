@@ -130,8 +130,91 @@ def test_alternative_omitted_when_claude_says_null():
     print("[PASS] alternative_trade stays null when Claude declines to flag one")
 
 
+MOCK_BATCH_JSON = [
+    {"symbol": "TESTUSDT", **MOCK_CLAUDE_JSON},
+    {
+        "symbol": "LOWGRADEUSDT",
+        "entry_low": 10.0, "entry_high": 10.5, "stop_loss": 9.5,
+        "take_profit_1": 11.0, "take_profit_2": None, "take_profit_3": None,
+        "risk_level": "high", "time_horizon": "scalp",
+        "reasons_for": ["Weak trend agreement only"],
+        "reasons_against": ["Score is low, structure doesn't confirm"],
+        "invalidation": "Any close below 9.5.",
+        "summary": "Low-conviction setup, not a strong signal.",
+        "disclaimer": "Not financial advice.",
+    },
+]
+
+
+class FakeArrayTextBlock:
+    type = "text"
+    text = json.dumps(MOCK_BATCH_JSON)
+
+
+class FakeArrayResponse:
+    content = [FakeArrayTextBlock()]
+
+
+def test_batch_pipeline():
+    # LOWGRADEUSDT: engineered to score low -> grade should land in
+    # decision._LOW_GRADES, exercising the short-schema path in the batch.
+    low_breakdown = dict(BREAKDOWN)
+    low_breakdown.update(trend=2, momentum=1, volume=1, funding=0, structure=1,
+                          history=0, regime=0, ml=0, sentiment=0, liquidity=0, risk=-5, total=0)
+    low_features = dict(FEATURES)
+    low_features["symbol"] = "LOWGRADEUSDT"
+
+    items = [
+        {"symbol": "TESTUSDT", "features": FEATURES, "breakdown": BREAKDOWN,
+         "history_stats": HISTORY_STATS, "ml_prediction": ML_PREDICTION, "alternative": ALTERNATIVE},
+        {"symbol": "LOWGRADEUSDT", "features": low_features, "breakdown": low_breakdown,
+         "history_stats": None, "ml_prediction": None, "alternative": None},
+    ]
+
+    with patch.object(reasoning._client.messages, "create", return_value=FakeArrayResponse()):
+        plans = reasoning.analyze_batch(items, REGIME)
+
+    assert set(plans.keys()) == {"TESTUSDT", "LOWGRADEUSDT"}, plans.keys()
+    assert plans["TESTUSDT"].recommendation == "long"
+    assert plans["TESTUSDT"].thesis == MOCK_CLAUDE_JSON["thesis"]
+    assert plans["LOWGRADEUSDT"].grade in ("C", "Avoid")
+    assert plans["LOWGRADEUSDT"].thesis is None  # short schema never asked for one
+    print(f"[PASS] batch pipeline: {len(plans)} plans, "
+          f"TESTUSDT grade={plans['TESTUSDT'].grade}, LOWGRADEUSDT grade={plans['LOWGRADEUSDT'].grade}")
+
+
+def test_batch_skips_unrecognized_and_reports_missing():
+    """A batch response naming a symbol we didn't ask about, or omitting
+    one we did, must not crash the whole batch — just skip/report."""
+    partial_response = [
+        {"symbol": "TESTUSDT", **MOCK_CLAUDE_JSON},
+        {"symbol": "NOT_IN_REQUEST", **MOCK_CLAUDE_JSON},
+    ]
+    items = [
+        {"symbol": "TESTUSDT", "features": FEATURES, "breakdown": BREAKDOWN,
+         "history_stats": HISTORY_STATS, "ml_prediction": ML_PREDICTION, "alternative": None},
+        {"symbol": "MISSINGUSDT", "features": {**FEATURES, "symbol": "MISSINGUSDT"}, "breakdown": BREAKDOWN,
+         "history_stats": None, "ml_prediction": None, "alternative": None},
+    ]
+
+    class PartialTextBlock:
+        type = "text"
+        text = json.dumps(partial_response)
+
+    class PartialResponse:
+        content = [PartialTextBlock()]
+
+    with patch.object(reasoning._client.messages, "create", return_value=PartialResponse()):
+        plans = reasoning.analyze_batch(items, REGIME)
+
+    assert set(plans.keys()) == {"TESTUSDT"}, plans.keys()  # MISSINGUSDT absent, NOT_IN_REQUEST dropped
+    print("[PASS] batch tolerates unrecognized/missing symbols without crashing")
+
+
 if __name__ == "__main__":
     test_full_pipeline()
     test_no_trade_direction_ignores_claude()
     test_alternative_omitted_when_claude_says_null()
+    test_batch_pipeline()
+    test_batch_skips_unrecognized_and_reports_missing()
     print("\nALL MOCKED REASONING TESTS PASSED")

@@ -195,22 +195,40 @@ def _worst(groups: dict[str, dict]) -> dict | None:
     return {"name": name, **groups[name]}
 
 
-def score_correlations(min_sample: int = 20) -> dict:
-    """Simple win/loss diagnostic per score component: mean value among
-    winning trades minus mean value among losing trades. A large positive
-    gap means that component's high values tend to precede wins; a large
-    negative gap means the opposite of what the scoring formula assumes.
-    This is NOT a statistical significance test — with few resolved trades
-    it's noise, which is why it refuses to run below min_sample."""
+_COMPONENT_LABELS = {
+    "trend_score": "Trend", "momentum_score": "Momentum", "volume_score": "Volume",
+    "funding_score": "Funding", "structure_score": "Structure", "history_score": "Historical Similarity",
+    "regime_score": "Market Regime", "ml_score": "ML Model", "sentiment_score": "Sentiment (Fear/Greed)",
+    "liquidity_score": "Cross-Exchange Liquidity", "risk_score": "Risk Penalty",
+}
+
+
+def feature_importance(min_sample: int = 20, limit: int | None = None) -> dict:
+    """Which score components actually differed between winning and losing
+    trades — mean value among wins minus mean value among losses, sorted by
+    absolute impact. A large positive gap means that component's high
+    values tend to precede wins; a large negative gap means the opposite of
+    what the scoring formula assumes (worth investigating, not just
+    reporting). This is NOT a statistical significance test — with few
+    resolved trades it's noise, which is why it refuses to run below
+    min_sample.
+
+    limit: if given, only the most recently CREATED `limit` resolved trades
+    are used — lets "what's mattered lately" be asked as data accumulates,
+    instead of always averaging over the entire history including whatever
+    scoring-formula version was active long ago (see score_formula_version
+    on each row for the exact version, if a future version-aware split is
+    worth building). None (default) uses every resolved trade."""
     session = SessionLocal()
     try:
-        rows = (
-            session.execute(
-                select(TradeOutcome).where(TradeOutcome.status.in_(["closed_win", "closed_loss"]))
-            )
-            .scalars()
-            .all()
+        stmt = (
+            select(TradeOutcome)
+            .where(TradeOutcome.status.in_(["closed_win", "closed_loss"]))
+            .order_by(TradeOutcome.created_at.desc())
         )
+        if limit:
+            stmt = stmt.limit(limit)
+        rows = session.execute(stmt).scalars().all()
     finally:
         session.close()
 
@@ -220,17 +238,29 @@ def score_correlations(min_sample: int = 20) -> dict:
             "note": f"Need at least {min_sample} resolved trades for this to mean anything; have {len(rows)}.",
         }
 
-    fields = [
-        "trend_score", "momentum_score", "volume_score", "funding_score", "structure_score",
-        "history_score", "regime_score", "ml_score", "sentiment_score", "liquidity_score", "risk_score",
-    ]
     wins = [r for r in rows if r.status == "closed_win"]
     losses = [r for r in rows if r.status == "closed_loss"]
 
-    result = {}
-    for field in fields:
+    components = []
+    win_minus_loss_mean = {}
+    for field, label in _COMPONENT_LABELS.items():
         win_mean = statistics.mean(getattr(r, field) for r in wins) if wins else 0.0
         loss_mean = statistics.mean(getattr(r, field) for r in losses) if losses else 0.0
-        result[field] = round(win_mean - loss_mean, 2)
+        diff = round(win_mean - loss_mean, 2)
+        win_minus_loss_mean[field] = diff
+        components.append({"component": field, "label": label, "win_minus_loss_mean": diff})
 
-    return {"sample_size": len(rows), "wins": len(wins), "losses": len(losses), "win_minus_loss_mean": result}
+    components.sort(key=lambda c: abs(c["win_minus_loss_mean"]), reverse=True)
+
+    return {
+        "sample_size": len(rows),
+        "wins": len(wins),
+        "losses": len(losses),
+        "components": components,
+        "win_minus_loss_mean": win_minus_loss_mean,  # kept for backward compatibility
+    }
+
+
+# Previous name — kept as an alias so nothing that already imports
+# score_correlations breaks.
+score_correlations = feature_importance

@@ -14,8 +14,15 @@ ANTHROPIC_MODEL = os.environ.get("ANTHROPIC_MODEL", "claude-sonnet-5")
 # low — a real call against this schema hit stop_reason="max_tokens" and
 # got cut off mid-JSON (confirmed live, not theoretical), which breaks the
 # parser outright. 2500 leaves real headroom while still well under the
-# original, untested 4096 default.
+# original, untested 4096 default. Used for the full analyst-report schema
+# (grade B+ and above — see reasoning.py).
 ANTHROPIC_MAX_TOKENS = int(os.environ.get("ANTHROPIC_MAX_TOKENS", "2500"))
+
+# Lower-grade setups (C/Avoid) get a deliberately short schema — no thesis,
+# scenarios, or alternative-trade writeup — so this budget can stay small
+# without risking the same truncation bug. Not simply a fraction of the
+# full budget; sized for the actually-smaller schema, verified live.
+ANTHROPIC_MAX_TOKENS_SHORT = int(os.environ.get("ANTHROPIC_MAX_TOKENS_SHORT", "700"))
 
 BINANCE_FUTURES_BASE = "https://fapi.binance.com"
 BINANCE_SPOT_BASE = "https://api.binance.com"

@@ -5,6 +5,12 @@ over data already computed. Claude's job is to EXPLAIN this score using the
 component breakdown and historical evidence — never to invent it.
 """
 
+# Bump whenever the weights or component set change materially — recorded
+# on every TradeOutcome row so a future "does the formula version predict
+# performance" analysis can actually separate results by which formula
+# produced them, instead of silently mixing scores from different eras.
+SCORE_FORMULA_VERSION = "1.0"
+
 
 def _tf(features: dict, tf: str) -> dict:
     return features.get(f"indicators_{tf}") or {}
