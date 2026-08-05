@@ -4,7 +4,17 @@ from dotenv import load_dotenv
 
 load_dotenv()
 
-ANTHROPIC_MODEL = "claude-opus-5"
+# Sonnet by default — this is a structured-output explanation task over
+# data Python already computed, not open-ended research; Opus's premium
+# over Sonnet isn't buying anything here. Override via env if a specific
+# deployment wants to spend more for a different reason.
+ANTHROPIC_MODEL = os.environ.get("ANTHROPIC_MODEL", "claude-sonnet-5")
+
+# Per-explanation output budget. The JSON schema (thesis, reasons for/
+# against, invalidation, bull/bear scenarios, biggest risks, alternative
+# trade, summary, disclaimer) comfortably fits well under 4096 — that
+# original budget was mostly unused headroom, paid for anyway.
+ANTHROPIC_MAX_TOKENS = int(os.environ.get("ANTHROPIC_MAX_TOKENS", "1200"))
 
 BINANCE_FUTURES_BASE = "https://fapi.binance.com"
 BINANCE_SPOT_BASE = "https://api.binance.com"

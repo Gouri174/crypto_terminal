@@ -27,18 +27,13 @@ import time
 
 from sqlalchemy import select
 
-from app.config import (
-    LLM_CANDIDATES,
-    LLM_MAX_AGE_SECONDS,
-    LLM_SCORE_CHANGE_THRESHOLD,
-    SCAN_INTERVAL_SECONDS,
-    UNIVERSE_SIZE,
-)
+from app.config import LLM_CANDIDATES, SCAN_INTERVAL_SECONDS, UNIVERSE_SIZE
 from app.data_sources import binance
 from app.db import SessionLocal
 from app.engine import lifecycle, market_regime, ml_model
 from app.engine.decision import decide_direction
 from app.engine.feature_builder import build_features
+from app.engine.llm_gate import should_reexplain
 from app.engine.reasoning import analyze_symbol
 from app.engine.scoring import score_opportunity
 from app.engine.similarity import build_current_vector, find_similar
@@ -204,15 +199,15 @@ def _persist_scan(scored: list, now_ms: int) -> list:
 
             needs_llm = False
             if rank < LLM_CANDIDATES:
-                if row is None or row.trade_plan is None:
-                    needs_llm = True
-                elif row.last_llm_score is None or abs(total - row.last_llm_score) >= LLM_SCORE_CHANGE_THRESHOLD:
-                    needs_llm = True
-                elif (
-                    row.trade_plan_updated_at is None
-                    or (now_ms - row.trade_plan_updated_at) > LLM_MAX_AGE_SECONDS * 1000
-                ):
-                    needs_llm = True
+                direction = decide_direction(features, breakdown)
+                needs_llm = should_reexplain(
+                    row.trade_plan if row else None,
+                    row.last_llm_score if row else None,
+                    row.trade_plan_updated_at if row else None,
+                    total,
+                    direction,
+                    now_ms,
+                )
 
             if row is None:
                 row = LiveOpportunity(

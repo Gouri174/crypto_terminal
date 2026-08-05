@@ -130,8 +130,9 @@ computed score, not parsed from what Claude claims it is.
   still exists unchanged and still ranks symbols against each other;
   confidence is a genuinely separate number now.
 - **AI reasoning, as head analyst not predictor**: Claude
-  (`claude-opus-5`) is told the direction, confidence, checklist, and grade
-  are already decided and must explain them, never contradict them. It
+  (`claude-sonnet-5` by default — see Cost controls below) is told the
+  direction, confidence, checklist, and grade are already decided and must
+  explain them, never contradict them. It
   produces: a one-line `thesis`, entry/stop/TP1-3, reasons for and
   explicitly "why NOT to take this trade," an invalidation point,
   bullish/bearish scenarios, the biggest risks, what evidence would change
@@ -149,6 +150,37 @@ computed score, not parsed from what Claude claims it is.
   Claude call** — the configured Anthropic account is out of API credits
   (a real `400 insufficient_credits` from the API, not a bug); that
   verification is still outstanding once credits are available.
+- **Cost controls**: found via the account actually running out of
+  credits — `GET /api/analyze/{symbol}` had NO caching at all. Every page
+  load, every refresh, called Claude live, completely bypassing the
+  background scanner's cost gating. Fixed:
+  - **Shared cache gate** (`app/engine/llm_gate.py:should_reexplain`): both
+    the scanner and `/api/analyze` now use the identical decision — skip
+    Claude if a cached explanation exists, its direction still matches,
+    its score hasn't moved ≥`LLM_SCORE_CHANGE_THRESHOLD` (8 points), and
+    it's younger than `LLM_MAX_AGE_SECONDS` (30 min). Direction-change is a
+    new trigger the scanner didn't have before either. **Verified live**:
+    forcing a fresh cache entry and re-requesting the same symbol returned
+    in ~1s (no API call possible that fast); a stale entry still correctly
+    attempted a live call. Deliberately does NOT track raw price-delta or
+    regime-label as separate triggers — see the module docstring for why
+    that would just duplicate what score/direction-change already catch.
+  - **Model**: default switched from Opus to `claude-sonnet-5`
+    (`ANTHROPIC_MODEL` env-overridable) — this is a structured-output
+    explanation task over data Python already computed, not open-ended
+    research, so Opus's premium wasn't buying anything.
+  - **Output budget**: `max_tokens` cut from 4096 to 1200
+    (`ANTHROPIC_MAX_TOKENS` env-overridable) — the JSON schema fits well
+    under that; the old budget was mostly unused headroom, paid for anyway.
+  - **Deliberately NOT done in this pass** (real trade-offs, not done
+    silently): batching multiple symbols into a single Claude call instead
+    of one call per symbol; further prompt summarization/shortening;
+    skipping Claude entirely for `no_trade`/low-grade setups (the existing
+    no_trade explanations are genuinely useful — e.g. explaining exactly
+    why a clean-looking trend is still not tradeable — and removing them
+    would be a real quality regression, not just a cost save); a manual
+    "regenerate" button on the frontend (the cache fix above already
+    removes the reason one would be needed).
 - **Storage**: SQLAlchemy, SQLite by default (zero extra infra), swap to
   Postgres by setting `DATABASE_URL` — no code changes needed.
 - **Continuous background engine** (`app/engine/background_scanner.py`):

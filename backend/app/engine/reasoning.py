@@ -3,7 +3,7 @@ import re
 
 import anthropic
 
-from app.config import ANTHROPIC_MODEL
+from app.config import ANTHROPIC_MAX_TOKENS, ANTHROPIC_MODEL
 from app.engine.confidence import compute_confidence
 from app.engine.decision import decide_direction, market_checklist, trade_grade
 from app.models.schemas import ConfidenceBreakdown, HistoryMatch, MLPrediction, ScoreBreakdown, TradePlan
@@ -171,7 +171,7 @@ def analyze_symbol(
 
     response = _client.messages.create(
         model=ANTHROPIC_MODEL,
-        max_tokens=4096,
+        max_tokens=ANTHROPIC_MAX_TOKENS,
         # Disabled so the full max_tokens budget goes to the JSON answer
         # itself rather than being shared with thinking tokens.
         thinking={"type": "disabled"},
