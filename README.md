@@ -143,13 +143,15 @@ computed score, not parsed from what Claude claims it is.
   in the prompt and parses it (rather than the Anthropic API's
   `output_format`/structured-outputs feature, which hit a "Grammar
   compilation timed out" error on this schema during testing).
-  **Verified with a mocked Claude response** (`backend/test_reasoning_mock.py`)
-  covering the full parse/inject/validate path, including that a mocked
-  bullish-sounding response still gets forced to `no_trade` when the
-  deterministic direction says so. **Not yet verified against a real
-  Claude call** — the configured Anthropic account is out of API credits
-  (a real `400 insufficient_credits` from the API, not a bug); that
-  verification is still outstanding once credits are available.
+  **Verified two ways**: first with a mocked Claude response
+  (`backend/test_reasoning_mock.py`) covering the full parse/inject/
+  validate path, including that a mocked bullish-sounding response still
+  gets forced to `no_trade` when the deterministic direction says so; then
+  against a REAL live call once API credits were available — a genuine
+  BTCUSDT response came back with `grade: "B+"`, a fully-populated
+  checklist, a real `thesis`, a real `take_profit_3`, and `reasons_against`
+  correctly framed as "why not." That live run also caught a real bug (see
+  Cost controls below).
 - **Cost controls**: found via the account actually running out of
   credits — `GET /api/analyze/{symbol}` had NO caching at all. Every page
   load, every refresh, called Claude live, completely bypassing the
@@ -159,19 +161,25 @@ computed score, not parsed from what Claude claims it is.
     Claude if a cached explanation exists, its direction still matches,
     its score hasn't moved ≥`LLM_SCORE_CHANGE_THRESHOLD` (8 points), and
     it's younger than `LLM_MAX_AGE_SECONDS` (30 min). Direction-change is a
-    new trigger the scanner didn't have before either. **Verified live**:
-    forcing a fresh cache entry and re-requesting the same symbol returned
-    in ~1s (no API call possible that fast); a stale entry still correctly
-    attempted a live call. Deliberately does NOT track raw price-delta or
-    regime-label as separate triggers — see the module docstring for why
-    that would just duplicate what score/direction-change already catch.
+    new trigger the scanner didn't have before either. **Verified live
+    against a real call**: same symbol, requested twice — first call took
+    31s (real Claude latency) and cost real tokens; second call, 1.3s
+    later, returned in ~1s with a `trade_plan` byte-identical to the first
+    (score/last_price differ, as they should — those are recomputed live
+    every request; the explanation itself was reused, not regenerated).
   - **Model**: default switched from Opus to `claude-sonnet-5`
     (`ANTHROPIC_MODEL` env-overridable) — this is a structured-output
     explanation task over data Python already computed, not open-ended
     research, so Opus's premium wasn't buying anything.
-  - **Output budget**: `max_tokens` cut from 4096 to 1200
-    (`ANTHROPIC_MAX_TOKENS` env-overridable) — the JSON schema fits well
-    under that; the old budget was mostly unused headroom, paid for anyway.
+  - **Output budget**: `max_tokens`, env-overridable via
+    `ANTHROPIC_MAX_TOKENS`. First tried 1200 (down from the original,
+    untested 4096) — **live testing caught this immediately**: a real call
+    hit `stop_reason: "max_tokens"` and got cut off mid-JSON, which broke
+    the parser outright (`ValueError: No JSON object found`). Raised to
+    2500, confirmed live afterward to complete with room to spare. Left as
+    a documented near-miss rather than silently fixed, since it's the
+    exact kind of regression a token-budget cut can cause without anyone
+    noticing until a request actually fails.
   - **Deliberately NOT done in this pass** (real trade-offs, not done
     silently): batching multiple symbols into a single Claude call instead
     of one call per symbol; further prompt summarization/shortening;

@@ -10,11 +10,12 @@ load_dotenv()
 # deployment wants to spend more for a different reason.
 ANTHROPIC_MODEL = os.environ.get("ANTHROPIC_MODEL", "claude-sonnet-5")
 
-# Per-explanation output budget. The JSON schema (thesis, reasons for/
-# against, invalidation, bull/bear scenarios, biggest risks, alternative
-# trade, summary, disclaimer) comfortably fits well under 4096 — that
-# original budget was mostly unused headroom, paid for anyway.
-ANTHROPIC_MAX_TOKENS = int(os.environ.get("ANTHROPIC_MAX_TOKENS", "1200"))
+# Per-explanation output budget. 1200 was tried first and measured too
+# low — a real call against this schema hit stop_reason="max_tokens" and
+# got cut off mid-JSON (confirmed live, not theoretical), which breaks the
+# parser outright. 2500 leaves real headroom while still well under the
+# original, untested 4096 default.
+ANTHROPIC_MAX_TOKENS = int(os.environ.get("ANTHROPIC_MAX_TOKENS", "2500"))
 
 BINANCE_FUTURES_BASE = "https://fapi.binance.com"
 BINANCE_SPOT_BASE = "https://api.binance.com"
