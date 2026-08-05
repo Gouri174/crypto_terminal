@@ -37,6 +37,7 @@ from app.config import (
 from app.data_sources import binance
 from app.db import SessionLocal
 from app.engine import lifecycle, market_regime, ml_model
+from app.engine.decision import decide_direction
 from app.engine.feature_builder import build_features
 from app.engine.reasoning import analyze_symbol
 from app.engine.scoring import score_opportunity
@@ -105,6 +106,24 @@ def _save_regime(regime: dict, now_ms: int) -> None:
         session.close()
 
 
+def _pick_alternative(scored: list, current_symbol: str, current_total: float) -> dict | None:
+    """The next-best-ranked non-no_trade setup this SAME cycle, only if
+    within 15 score points of the current symbol — close enough to be a
+    genuine alternative, not a consolation prize. `scored` is already
+    sorted descending by total, so the first gap over 15 means nothing
+    closer exists later either."""
+    for total, breakdown, _history_stats, _ml_prediction, ticker, features in scored:
+        symbol = ticker["symbol"]
+        if symbol == current_symbol:
+            continue
+        if current_total - total > 15:
+            break
+        direction = decide_direction(features, breakdown)
+        if direction != "no_trade":
+            return {"symbol": symbol, "score": total, "direction": direction}
+    return None
+
+
 async def _run_scan() -> dict:
     regime = load_current_regime()  # from the previous cycle — see module docstring
 
@@ -149,9 +168,10 @@ async def _run_scan() -> dict:
 
     explained = 0
     for symbol, features, breakdown, history_stats, ml_prediction in to_explain:
+        alternative = _pick_alternative(scored, symbol, breakdown["total"])
         try:
             plan = await asyncio.to_thread(
-                analyze_symbol, features, breakdown, history_stats, regime, ml_prediction
+                analyze_symbol, features, breakdown, history_stats, regime, ml_prediction, alternative
             )
         except Exception as exc:
             print(f"[scanner] Claude explanation failed for {symbol}: {exc}")

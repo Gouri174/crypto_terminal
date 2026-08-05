@@ -60,7 +60,7 @@ export default function CoinDetailPage({
           <span className="text-xl">${data.last_price.toLocaleString()}</span>
         </div>
 
-        <div className="mb-4">
+        <div className="mb-4 flex items-center gap-2">
           <span
             className={`text-xs uppercase font-semibold px-2 py-1 rounded border ${lifecycleColor(
               data.lifecycle_status
@@ -68,7 +68,19 @@ export default function CoinDetailPage({
           >
             {lifecycleLabel(data.lifecycle_status)}
           </span>
+          {plan.grade && (
+            <span
+              className={`text-xs uppercase font-semibold px-2 py-1 rounded border ${gradeColor(
+                plan.grade
+              )}`}
+              title="Deterministic — see app/engine/decision.py:trade_grade"
+            >
+              Grade {plan.grade}
+            </span>
+          )}
         </div>
+
+        {plan.thesis && <p className="text-gray-300 italic mb-4">{plan.thesis}</p>}
 
         <div className="grid grid-cols-2 sm:grid-cols-4 gap-4 mb-6 text-sm">
           <Field label="Recommendation" value={plan.recommendation.replace("_", " ")} />
@@ -79,11 +91,59 @@ export default function CoinDetailPage({
           <Field label="Stop Loss" value={plan.stop_loss ?? "—"} />
           <Field label="Take Profit 1" value={plan.take_profit_1 ?? "—"} />
           <Field label="Take Profit 2" value={plan.take_profit_2 ?? "—"} />
+          {plan.take_profit_3 != null && <Field label="Take Profit 3" value={plan.take_profit_3} />}
         </div>
+
+        {plan.alternative_trade && (
+          <div className="mb-6 rounded border border-border bg-black/20 p-3 text-sm">
+            <span className="text-gray-500 text-xs uppercase font-semibold">
+              Consider instead: {plan.alternative_trade.symbol}
+            </span>
+            <p className="text-gray-300 mt-1">{plan.alternative_trade.reason}</p>
+          </div>
+        )}
+
+        {Object.keys(plan.checklist).length > 0 && (
+          <Section title="Market Checklist">
+            <div className="grid grid-cols-2 sm:grid-cols-4 gap-2 text-sm">
+              {Object.entries(plan.checklist).map(([key, passed]) => (
+                <div key={key} className="flex items-center gap-1.5">
+                  <span className={passed ? "text-bull" : "text-bear"}>{passed ? "✓" : "✗"}</span>
+                  <span className="text-gray-400 capitalize">{key.replace(/_/g, " ")}</span>
+                </div>
+              ))}
+            </div>
+          </Section>
+        )}
 
         {plan.score_breakdown && (
           <Section title="Why This Score — Computed, Not Guessed">
             <ScoreBars breakdown={plan.score_breakdown} />
+          </Section>
+        )}
+
+        {plan.confidence_breakdown && (
+          <Section title="Confidence — Agreement Between Signals, Not Just the Score">
+            <div className="space-y-1.5">
+              {Object.entries(plan.confidence_breakdown.components).map(([key, value]) => (
+                <div key={key} className="flex items-center gap-3 text-sm">
+                  <div className="w-24 text-gray-400 shrink-0 capitalize">{key}</div>
+                  <div className="flex-1 h-1.5 rounded bg-border overflow-hidden">
+                    <div className="h-full bg-bull" style={{ width: `${value * 100}%` }} />
+                  </div>
+                  <div className="w-12 text-right tabular-nums text-gray-400">
+                    {Math.round(value * 100)}%
+                  </div>
+                </div>
+              ))}
+            </div>
+            {plan.confidence_breakdown.penalties.length > 0 && (
+              <ul className="mt-3 list-disc list-inside text-sm text-bear space-y-1">
+                {plan.confidence_breakdown.penalties.map((p, i) => (
+                  <li key={i}>{p}</li>
+                ))}
+              </ul>
+            )}
           </Section>
         )}
 
@@ -102,7 +162,7 @@ export default function CoinDetailPage({
         )}
 
         {plan.reasons_against.length > 0 && (
-          <Section title="Reasons Against Trade">
+          <Section title="Why NOT To Take This Trade">
             <ul className="list-disc list-inside text-gray-300 space-y-1">
               {plan.reasons_against.map((r, i) => (
                 <li key={i}>{r}</li>
@@ -219,6 +279,13 @@ export default function CoinDetailPage({
       </div>
     </main>
   );
+}
+
+function gradeColor(grade: string): string {
+  if (grade === "A+" || grade === "A") return "border-bull text-bull";
+  if (grade === "B+" || grade === "B") return "border-yellow-500 text-yellow-500";
+  if (grade === "C") return "border-orange-500 text-orange-500";
+  return "border-bear text-bear"; // "Avoid"
 }
 
 function fmtRange(lo: number | null, hi: number | null) {

@@ -104,15 +104,51 @@ computed score, not parsed from what Claude claims it is.
   or short. Deliberately scoped to the same-symbol check, not a full
   second/third universe scan — that would multiply LLM/API cost by
   exchange count for coverage, not signal quality.
-- **AI reasoning**: Claude (`claude-opus-5`) receives the computed score
-  breakdown, real historical-match stats, ML predictions, Fear & Greed,
-  news/Reddit context, and cross-exchange data, and explains them —
-  entry/stop/targets, reasons for/against, an explicit invalidation point,
-  bullish/bearish scenarios, the biggest risks to the specific setup, and
-  what additional evidence would raise or lower confidence. Requests a
-  JSON object directly in the prompt and parses it (rather than the
-  Anthropic API's `output_format`/structured-outputs feature, which hit a
-  "Grammar compilation timed out" error on this schema during testing).
+- **Decision consistency** (`app/engine/decision.py`): direction
+  (long/short/no_trade) is no longer Claude's call. `decide_direction()`
+  reads the same multi-timeframe trend votes `scoring.py` already computes
+  — majority of 1h/4h/1d trend-vs-EMA50, gated by a minimum total score
+  (`MIN_SCORE_FOR_TRADE`, currently 45) — and a tie or sub-threshold score
+  is `no_trade`. This is computed BEFORE Claude is ever called and injected
+  into `TradePlan.recommendation` after parsing; the model's own JSON is no
+  longer even asked for a recommendation field. `market_checklist()`
+  (trend/structure/volume/funding/history/regime/risk pass-fail, plain
+  thresholds on already-computed values) and `trade_grade()` (A+ through
+  Avoid, a deterministic function of confidence) are the same pattern —
+  computed, injected, never asked of the model.
+- **Composite confidence** (`app/engine/confidence.py`): replaces "confidence
+  = the score" with a weighted-agreement formula over independent signals
+  (25% trend, 20% historical similarity, 15% ML, 15% structure, 10% volume,
+  5% each funding/regime/sentiment — direction-agnostic components are
+  normalized against their own max, trend/ML explicitly measure agreement
+  *with the chosen direction*, not just "is this signal strong"), then
+  applies penalties: historical similarity pointing the opposite direction
+  (−15), crowded long/short positioning (−8), wide cross-exchange spread
+  (−5), unusually high ATR-based volatility (−5). A high raw score with a
+  contradicting historical match now reads as lower-confidence than the
+  score alone would suggest — which is the point. `ScoreBreakdown.total`
+  still exists unchanged and still ranks symbols against each other;
+  confidence is a genuinely separate number now.
+- **AI reasoning, as head analyst not predictor**: Claude
+  (`claude-opus-5`) is told the direction, confidence, checklist, and grade
+  are already decided and must explain them, never contradict them. It
+  produces: a one-line `thesis`, entry/stop/TP1-3, reasons for and
+  explicitly "why NOT to take this trade," an invalidation point,
+  bullish/bearish scenarios, the biggest risks, what evidence would change
+  confidence, and — when a deterministically-chosen `alternative_candidate`
+  from the same scan cycle scored within 15 points — a sentence on whether
+  it's genuinely more compelling (the alternative's symbol is fixed by the
+  engine, Claude only writes the reason). Requests a JSON object directly
+  in the prompt and parses it (rather than the Anthropic API's
+  `output_format`/structured-outputs feature, which hit a "Grammar
+  compilation timed out" error on this schema during testing).
+  **Verified with a mocked Claude response** (`backend/test_reasoning_mock.py`)
+  covering the full parse/inject/validate path, including that a mocked
+  bullish-sounding response still gets forced to `no_trade` when the
+  deterministic direction says so. **Not yet verified against a real
+  Claude call** — the configured Anthropic account is out of API credits
+  (a real `400 insufficient_credits` from the API, not a bug); that
+  verification is still outstanding once credits are available.
 - **Storage**: SQLAlchemy, SQLite by default (zero extra infra), swap to
   Postgres by setting `DATABASE_URL` — no code changes needed.
 - **Continuous background engine** (`app/engine/background_scanner.py`):

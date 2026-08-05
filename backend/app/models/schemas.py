@@ -79,10 +79,45 @@ class RegimeInfo(BaseModel):
     summary: str
 
 
+class ConfidenceBreakdown(BaseModel):
+    """See app/engine/confidence.py. Deliberately separate from
+    ScoreBreakdown — the score ranks symbols against each other; this
+    reflects how much independent signals AGREE, which is what
+    `confidence` is actually set from now."""
+
+    components: dict[str, float]
+    penalties: list[str]
+
+
+class AlternativeTrade(BaseModel):
+    """`symbol` is chosen deterministically (the next-best-ranked setup
+    this scan cycle, see background_scanner.py) — Claude only writes
+    `reason`, it never picks the symbol."""
+
+    symbol: str
+    reason: str
+
+
 class TradePlan(BaseModel):
     symbol: str
-    recommendation: str  # "long" | "short" | "no_trade"
-    confidence: int  # 0-100 — set from ScoreBreakdown.total, not by the LLM
+    # "long" | "short" | "no_trade" — decided by app/engine/decision.py
+    # from multi-timeframe trend agreement, BEFORE Claude is called.
+    # Claude explains this call; it cannot change it.
+    recommendation: str
+    # 0-100 — set from ConfidenceBreakdown's weighted signal agreement
+    # (app/engine/confidence.py), not asked of or trusted from the LLM.
+    confidence: int
+    # A+ | A | B+ | B | C | Avoid — a deterministic function of confidence,
+    # see app/engine/decision.py:trade_grade.
+    grade: str | None = None
+    confidence_breakdown: ConfidenceBreakdown | None = None
+    # Deterministic pass/fail on each factor (app/engine/decision.py)  —
+    # Claude may reference these in its reasoning, it doesn't compute them.
+    checklist: dict[str, bool] = {}
+    # A short "why does this setup exist" line, distinct from the longer
+    # `summary` below — Claude's, but constrained to the fixed direction.
+    thesis: str | None = None
+    alternative_trade: AlternativeTrade | None = None
     entry_low: float | None = None
     entry_high: float | None = None
     stop_loss: float | None = None

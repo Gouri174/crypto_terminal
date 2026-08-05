@@ -51,15 +51,31 @@ export interface RegimeInfo {
   summary: string;
 }
 
+export interface ConfidenceBreakdown {
+  components: Record<string, number>;
+  penalties: string[];
+}
+
+export interface AlternativeTrade {
+  symbol: string;
+  reason: string;
+}
+
 export interface TradePlan {
   symbol: string;
   recommendation: "long" | "short" | "no_trade" | string;
   confidence: number;
+  grade: string | null;
+  confidence_breakdown: ConfidenceBreakdown | null;
+  checklist: Record<string, boolean>;
+  thesis: string | null;
+  alternative_trade: AlternativeTrade | null;
   entry_low: number | null;
   entry_high: number | null;
   stop_loss: number | null;
   take_profit_1: number | null;
   take_profit_2: number | null;
+  take_profit_3: number | null;
   risk_level: string;
   time_horizon: string;
   risk_reward: string | null;
