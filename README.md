@@ -74,16 +74,45 @@ computed score, not parsed from what Claude claims it is.
   symbol lacks enough history.
 - **Deterministic scoring model** (`app/engine/scoring.py`): a fixed,
   documented weighted formula (trend, momentum, volume, funding, structure,
-  history match, regime fit, ML prediction, risk penalty) — this is the
-  confidence score. Claude explains it; it cannot change it.
+  history match, regime fit, ML prediction, sentiment, cross-exchange
+  liquidity, risk penalty) — this is the confidence score. Claude explains
+  it; it cannot change it.
+- **Free market context — sentiment & news** (`app/data_sources/fear_greed.py`,
+  `app/data_sources/news.py`, `app/data_sources/reddit.py`,
+  `app/engine/news_engine.py`): all free-tier, no paid API keys.
+  - **Fear & Greed Index** (alternative.me, 1h cache): scored deliberately
+    small and one-directional — only extreme readings (≤20 or ≥80) move the
+    score (±3), and only as a mild contrarian flag. Not treated as a
+    trend signal.
+  - **News headlines** (CoinDesk + Cointelegraph RSS, 5min cache) and
+    **Reddit** (r/CryptoCurrency RSS, 10min cache, requires a real
+    `User-Agent` header or Reddit 429s the request): keyword-matched
+    against the symbol's coin name and macro keywords, passed to Claude as
+    raw context (headlines + sample post titles + a mention count) — **not
+    scored numerically**. A mention-count spike could mean bullish
+    excitement or panic-selling discussion; distinguishing those needs
+    actual reading, so the prompt tells Claude to read the sample titles
+    itself rather than trusting a fabricated sentiment score.
+- **Cross-exchange liquidity check** (`app/data_sources/bybit.py`,
+  `app/data_sources/okx.py`, `app/engine/cross_exchange.py`): for each
+  scored symbol, fetches the same pair's price/funding/open-interest from
+  Bybit and OKX (public REST, no keys) alongside Binance, and computes
+  price-spread% and funding-rate divergence across venues. Scored as a
+  small, **directionless** penalty (−3/−2) — a real cross-venue spread is a
+  liquidity-stress signal ("liquidity often moves before price") but says
+  nothing about which way it resolves, so it never pushes the score long
+  or short. Deliberately scoped to the same-symbol check, not a full
+  second/third universe scan — that would multiply LLM/API cost by
+  exchange count for coverage, not signal quality.
 - **AI reasoning**: Claude (`claude-opus-5`) receives the computed score
-  breakdown, real historical-match stats, and ML predictions, and explains
-  them — entry/stop/targets, reasons for/against, an explicit invalidation
-  point, bullish/bearish scenarios, the biggest risks to the specific
-  setup, and what additional evidence would raise or lower confidence.
-  Requests a JSON object directly in the prompt and parses it (rather than
-  the Anthropic API's `output_format`/structured-outputs feature, which hit
-  a "Grammar compilation timed out" error on this schema during testing).
+  breakdown, real historical-match stats, ML predictions, Fear & Greed,
+  news/Reddit context, and cross-exchange data, and explains them —
+  entry/stop/targets, reasons for/against, an explicit invalidation point,
+  bullish/bearish scenarios, the biggest risks to the specific setup, and
+  what additional evidence would raise or lower confidence. Requests a
+  JSON object directly in the prompt and parses it (rather than the
+  Anthropic API's `output_format`/structured-outputs feature, which hit a
+  "Grammar compilation timed out" error on this schema during testing).
 - **Storage**: SQLAlchemy, SQLite by default (zero extra infra), swap to
   Postgres by setting `DATABASE_URL` — no code changes needed.
 - **Continuous background engine** (`app/engine/background_scanner.py`):
@@ -181,18 +210,19 @@ This follows a phased build rather than attempting everything at once:
   infra, but doesn't horizontally scale past one process and doesn't
   survive a process restart mid-cycle gracefully. Worth adding once running
   more than one backend instance.
-- **More exchanges** (Bybit, OKX, Hyperliquid, Coinbase, Kraken, Bitget) —
-  same pattern as Binance, additive, not yet built. Deliberately deprioritized
-  below the items above — more exchanges increase coverage, not signal
-  quality.
+- **Full multi-exchange universe scanning** — what's built is a same-symbol
+  cross-reference against Bybit + OKX (price/funding divergence, see above),
+  not a second/third full universe scan on those exchanges. Hyperliquid,
+  Coinbase, Kraken, Bitget are not integrated at all. Deliberately
+  deprioritized: more exchanges scanned independently increases coverage,
+  not signal quality, at real added LLM/API cost.
 - **Order flow** (order book depth, CVD, liquidation clusters) — needs
   websocket order-book state tracking, a distinct engineering effort.
 - **On-chain data** (Glassnode/CryptoQuant/CoinMetrics-tier) — these are
   paid products. Not integrated; would need your own subscription and API
   key, same pattern as the Anthropic key.
-- **Macro/news/sentiment** — free sources (RSS, FRED, Fear & Greed, GitHub
-  activity) are straightforward next additions; X/Twitter's API is paid and
-  not planned.
+- **X/Twitter sentiment** — X's API is paid and not planned. Free-tier
+  sentiment (Fear & Greed, RSS news, Reddit) is built — see above.
 - **RAG knowledge base** — will be built from free/public sources only
   (Binance Academy/Research, CME/Fed publications, arXiv/SSRN, your own
   notes). Will **not** ingest copyrighted trading books — that's a real

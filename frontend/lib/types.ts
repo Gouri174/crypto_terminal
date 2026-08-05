@@ -7,6 +7,8 @@ export interface ScoreBreakdown {
   history: number;
   regime: number;
   ml: number;
+  sentiment: number;
+  liquidity: number;
   risk: number;
   total: number;
 }

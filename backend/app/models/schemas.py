@@ -4,7 +4,15 @@ from pydantic import BaseModel
 class ScoreBreakdown(BaseModel):
     """Deterministic, computed score components. Never invented by the LLM —
     see app/engine/scoring.py. Claude explains these numbers; it doesn't
-    set them."""
+    set them.
+
+    Fields added after the original set default to 0.0 rather than being
+    required — LiveOpportunity caches a trade_plan JSON blob that can
+    outlive a schema change (a symbol not re-explained this cycle keeps its
+    previous plan), and a required field with no default breaks reading
+    back anything scored before that field existed. Learned this the hard
+    way: a live scan crashed on read with a real ValidationError until
+    these got defaults."""
 
     trend: float
     momentum: float
@@ -12,10 +20,12 @@ class ScoreBreakdown(BaseModel):
     funding: float
     structure: float
     history: float
-    regime: float
-    ml: float
     risk: float
     total: float
+    regime: float = 0.0
+    ml: float = 0.0
+    sentiment: float = 0.0
+    liquidity: float = 0.0
 
 
 class MLPrediction(BaseModel):

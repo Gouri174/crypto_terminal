@@ -28,9 +28,14 @@ def score_opportunity(
     history = _history_score(history_stats)
     regime_score = _regime_score(features, regime)
     ml = _ml_score(ml_prediction)
+    sentiment = _sentiment_score(features)
+    liquidity = _liquidity_score(features)
     risk = _risk_penalty(features)
 
-    total = trend + momentum + volume + funding + structure + history + regime_score + ml + risk
+    total = (
+        trend + momentum + volume + funding + structure + history
+        + regime_score + ml + sentiment + liquidity + risk
+    )
     total = max(0.0, min(100.0, total))
 
     return {
@@ -42,6 +47,8 @@ def score_opportunity(
         "history": history,
         "regime": regime_score,
         "ml": ml,
+        "liquidity": liquidity,
+        "sentiment": sentiment,
         "risk": risk,
         "total": round(total, 1),
     }
@@ -172,6 +179,46 @@ def _ml_score(ml_prediction: dict | None) -> float:
     if drawdown_prob is not None:
         score -= drawdown_prob * 4  # further penalty if a large adverse move looks likely
     return round(max(-10.0, min(8.0, score)), 2)
+
+
+def _sentiment_score(features: dict) -> float:
+    """Deliberately tiny and one-directional: extreme Fear & Greed readings
+    only. Reddit mention counts are passed to Claude as raw context (see
+    news_engine.py) but NOT scored numerically here — a spike in mentions
+    could mean bullish excitement or panic-selling discussion, and
+    distinguishing those needs actual reading, not a mention count. Don't
+    fabricate a directional signal from ambiguous data."""
+    fear_greed = features.get("fear_greed")
+    if not fear_greed or fear_greed.get("value") is None:
+        return 0.0
+    value = fear_greed["value"]
+    if value <= 20:
+        return 3.0  # extreme fear — mildly contrarian-bullish, weak signal
+    if value >= 80:
+        return -3.0  # extreme greed — euphoria/overextension risk
+    return 0.0
+
+
+def _liquidity_score(features: dict) -> float:
+    """Cross-exchange price/funding divergence (Binance vs Bybit vs OKX —
+    see cross_exchange.py) as a liquidity-health signal. Deliberately
+    directionless: a wide spread doesn't tell you which way price will
+    move, only that something is stressed across venues, which is worth a
+    small caution flag either way — not a bullish/bearish call."""
+    cross = features.get("cross_exchange")
+    if not cross:
+        return 0.0
+
+    penalty = 0.0
+    spread = cross.get("price_spread_pct")
+    if spread is not None and spread > 0.5:
+        penalty -= 3.0
+
+    funding_div = cross.get("funding_divergence")
+    if funding_div is not None and abs(funding_div) > 0.001:
+        penalty -= 2.0
+
+    return round(penalty, 2)
 
 
 def _risk_penalty(features: dict) -> float:

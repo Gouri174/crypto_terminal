@@ -259,6 +259,8 @@ const SCORE_ROWS: {
   { key: "history", label: "History Match", max: 15 },
   { key: "regime", label: "Market Regime Fit", max: 5, signed: true },
   { key: "ml", label: "ML Model", max: 10, signed: true },
+  { key: "sentiment", label: "Sentiment (Fear/Greed)", max: 3, signed: true },
+  { key: "liquidity", label: "Cross-Exchange Liquidity", max: 5, signed: true },
   { key: "risk", label: "Risk Penalty", max: 20, signed: true },
 ];
 
