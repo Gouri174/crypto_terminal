@@ -484,6 +484,15 @@ long-lived process instead.
 Note: on Render's free plan the service sleeps after ~15 minutes idle, so the
 first request after a gap adds a ~30–50s cold start on top of normal latency.
 
+Note on region — **found live, not theoretical**: Binance's Futures API
+(`fapi.binance.com`) returns HTTP 451 ("Unavailable For Legal Reasons") for
+US-based IPs specifically (Binance.US is a separate entity that doesn't
+offer futures). Render's default regions (Oregon/Virginia) are both US and
+will hit this on every single scan cycle — `render.yaml` sets
+`region: frankfurt` for exactly this reason. If you ever see the scanner
+logs repeatedly show `[scanner] cycle failed: Client error '451'`, this is
+why — confirm the service's region isn't a US one.
+
 Note on storage: the backend defaults to a local SQLite file, which lives on
 Render's ephemeral disk — a redeploy wipes backfilled history. Set
 `DATABASE_URL` to a Postgres connection string (Render offers a free

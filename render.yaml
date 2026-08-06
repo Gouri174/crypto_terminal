@@ -4,6 +4,13 @@ services:
     runtime: python
     rootDir: backend
     plan: free
+    # Binance's Futures API (fapi.binance.com) returns HTTP 451 for
+    # US-based IPs specifically (Binance.US is a separate, futures-less
+    # entity) — Render's default regions are Oregon/Virginia, both US.
+    # Frankfurt sidesteps this; confirmed live after Render's Oregon
+    # default hit 451 on every scan cycle. Singapore also works if
+    # latency to Frankfurt matters more than to Binance's servers.
+    region: frankfurt
     buildCommand: pip install -r requirements.txt
     startCommand: uvicorn app.main:app --host 0.0.0.0 --port $PORT
     envVars:
