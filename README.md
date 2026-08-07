@@ -556,6 +556,32 @@ computed score, not parsed from what Claude claims it is.
   **Verified live**: real dev DB currently has 4 resolved trades, correctly
   returns `{"recommend": false, "reason": "Only 4 resolved trades; need >=
   200..."}`.
+- **Full-universe scan history** (`app/models/db_models.py:ScanSnapshot`):
+  a real gap, not a small-sample problem — every scan cycle already scores
+  the whole ~40-coin universe (`background_scanner.py:_persist_scan`), but
+  only wrote it into `LiveOpportunity`, which is overwritten in place every
+  cycle. Nothing kept the history, so "was the #1 ranked pick actually
+  better than #9" and "what scored well but was never published, and why"
+  were both genuinely unanswerable — no small sample, no data at all.
+  `ScanSnapshot` is a new append-only table: one row per scanned symbol per
+  cycle (rank, score, breakdown, deterministic direction, whether it was
+  in the top LLM candidates, whether it was (re)explained this cycle,
+  whether it already had an active plan, market regime, and a plain-
+  English `rejection_reason` when it wasn't published — computed from a
+  fixed template, never asked of Claude, so a reason is never invented).
+  Pure data capture: nothing here feeds back into scoring or which symbols
+  get explained — the "no scoring changes" rule stays intact. **Verified
+  live**: a real scan cycle wrote 38 rows in one pass — 25 with an active
+  plan (`rejection_reason: null`), 7 correctly flagged `no_trade` (the
+  deterministic direction gate), 6 correctly flagged as scoring well but
+  falling outside the top-6 LLM candidates that cycle (e.g. `"rank 7
+  outside top 6 candidates this cycle"`). Won't answer anything
+  retroactively — it only starts accumulating from the day it shipped —
+  but it's the one piece that makes a future "is the ranking actually
+  correct" or "what am I rejecting" analysis possible at all. No report
+  function built on top yet; needs real volume (weeks, not the current
+  handful of cycles) before a rank-vs-outcome comparison would mean
+  anything.
 
 ## Roadmap — what's NOT implemented yet, and why
 

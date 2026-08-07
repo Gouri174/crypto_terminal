@@ -38,10 +38,27 @@ from app.engine.reasoning import analyze_batch
 from app.engine.scoring import score_opportunity
 from app.engine.similarity import build_current_vector, find_similar
 from app.engine.trade_outcomes import open_trade_outcome, update_open_trades
-from app.models.db_models import LiveOpportunity, MarketRegimeState
+from app.models.db_models import LiveOpportunity, MarketRegimeState, ScanSnapshot
 from app.ws import broadcast_update
 
 SIMILARITY_INTERVAL = "4h"
+
+
+def _rejection_reason(
+    direction: str, rank: int, in_top_candidates: bool, explained_this_cycle: bool, had_active_plan: bool
+) -> str | None:
+    """Deterministic, template-built — never asks Claude to explain why a
+    symbol wasn't published, since that would risk inventing a reason.
+    None means the symbol WAS published/active this cycle."""
+    if had_active_plan:
+        return None
+    if direction == "no_trade":
+        return "no_trade: deterministic direction gate not met (score below threshold, or timeframe trend split)"
+    if not in_top_candidates:
+        return f"rank {rank} outside top {LLM_CANDIDATES} candidates this cycle"
+    if not explained_this_cycle:
+        return "in top candidates but not (re)explained this cycle (see llm_gate.should_reexplain)"
+    return None
 
 # Guards against the periodic loop and a request-triggered bootstrap scan
 # (see routes/opportunities.py) running concurrently, which could otherwise
@@ -159,7 +176,7 @@ async def _run_scan() -> dict:
 
     scored.sort(key=lambda x: x[0], reverse=True)
     now_ms = int(time.time() * 1000)
-    to_explain = _persist_scan(scored, now_ms)
+    to_explain = _persist_scan(scored, now_ms, (regime or {}).get("label"))
 
     # Advance every open TradeOutcome against this cycle's real prices
     # before issuing any new plans — see app/engine/trade_outcomes.py.
@@ -207,9 +224,11 @@ async def _run_scan() -> dict:
     }
 
 
-def _persist_scan(scored: list, now_ms: int) -> list:
+def _persist_scan(scored: list, now_ms: int, regime_label: str | None) -> list:
     """Writes score+features+lifecycle for every scanned symbol; returns
-    the subset that needs a fresh Claude explanation this cycle."""
+    the subset that needs a fresh Claude explanation this cycle. Also
+    appends one ScanSnapshot row per symbol — the full-universe history
+    LiveOpportunity's overwrite-in-place design doesn't keep."""
     session = SessionLocal()
     to_explain = []
     try:
@@ -223,9 +242,16 @@ def _persist_scan(scored: list, now_ms: int) -> list:
             row = existing.get(symbol)
             price = float(ticker["lastPrice"])
 
+            # Cheap pure-Python decision — computed for every symbol now
+            # (not just the top LLM_CANDIDATES) so ScanSnapshot's direction
+            # column is meaningful for the whole universe, not just the
+            # published subset.
+            direction = decide_direction(features, breakdown)
+            in_top_candidates = rank < LLM_CANDIDATES
+            had_active_plan = row.trade_plan is not None if row else False
+
             needs_llm = False
-            if rank < LLM_CANDIDATES:
-                direction = decide_direction(features, breakdown)
+            if in_top_candidates:
                 needs_llm = should_reexplain(
                     row.trade_plan if row else None,
                     row.last_llm_score if row else None,
@@ -234,6 +260,24 @@ def _persist_scan(scored: list, now_ms: int) -> list:
                     direction,
                     now_ms,
                 )
+
+            session.add(
+                ScanSnapshot(
+                    timestamp=now_ms,
+                    symbol=symbol,
+                    rank=rank,
+                    score_total=total,
+                    score_breakdown=breakdown,
+                    direction=direction,
+                    in_top_candidates=in_top_candidates,
+                    explained_this_cycle=needs_llm,
+                    had_active_plan=had_active_plan,
+                    market_regime=regime_label,
+                    rejection_reason=_rejection_reason(
+                        direction, rank, in_top_candidates, needs_llm, had_active_plan
+                    ),
+                )
+            )
 
             if row is None:
                 row = LiveOpportunity(

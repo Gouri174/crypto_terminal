@@ -308,3 +308,47 @@ class MarketRegimeState(Base):
     breadth_bearish_pct: Mapped[float] = mapped_column(Float)
     universe_size: Mapped[int] = mapped_column(Integer)
     summary: Mapped[str] = mapped_column(String(500))
+
+
+class ScanSnapshot(Base):
+    """Append-only record of EVERY scanned symbol's score/decision each
+    cycle — not just the top-ranked ones that go on to become a
+    TradeOutcome. LiveOpportunity already computes this for the whole
+    universe, but overwrites it in place every cycle; nothing kept the
+    history, so "was rank #1 actually better than rank #9" and "what
+    scored well but was never published, and why" were both genuinely
+    unanswerable — not a small sample size, no data existed at all.
+
+    Pure data capture: nothing here feeds back into scoring, ranking, or
+    which symbols get explained/published — see the "no scoring changes"
+    rule this project is under. Written every cycle from
+    background_scanner.py:_persist_scan(), the same loop that already
+    computes rank/score/direction for the whole universe, so this is zero
+    extra API or compute cost — just persisting numbers already in memory.
+    """
+
+    __tablename__ = "scan_snapshots"
+    __table_args__ = (
+        Index("ix_scan_snapshot_timestamp", "timestamp"),
+        Index("ix_scan_snapshot_symbol", "symbol"),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    timestamp: Mapped[int] = mapped_column(Integer)  # epoch ms
+    symbol: Mapped[str] = mapped_column(String(20))
+    rank: Mapped[int] = mapped_column(Integer)  # 0 = highest-scored this cycle
+    score_total: Mapped[float] = mapped_column(Float)
+    score_breakdown: Mapped[dict] = mapped_column(JSON)
+    direction: Mapped[str] = mapped_column(String(10))  # "long" | "short" | "no_trade"
+
+    in_top_candidates: Mapped[bool] = mapped_column(Boolean)  # rank < LLM_CANDIDATES this cycle
+    explained_this_cycle: Mapped[bool] = mapped_column(Boolean)  # Claude was (re)called this cycle
+    had_active_plan: Mapped[bool] = mapped_column(Boolean)  # already had a live trade_plan from an earlier cycle
+
+    market_regime: Mapped[str | None] = mapped_column(String(20), nullable=True)
+
+    # Deterministic, template-built — never LLM-authored (this project never
+    # fabricates a reason). None means the symbol WAS published/active this
+    # cycle; otherwise a plain-English reason it wasn't. See
+    # background_scanner.py:_rejection_reason.
+    rejection_reason: Mapped[str | None] = mapped_column(String(200), nullable=True)
