@@ -523,6 +523,51 @@ def evidence_coverage(min_sample: int = 5) -> dict:
     }
 
 
+def momentum_vs_time_to_tp1(min_sample: int = 5) -> dict:
+    """Distinct question from momentum_vs_runup: does a maxed momentum
+    score actually LOSE more, or does it just reach TP1 FASTER — closing
+    out before this existed, tp1_hit alone couldn't tell those apart.
+    Only includes trades where tp1_hit_at and entry_time are both known
+    (i.e. TP1 was actually reached, and the field existed to record when)
+    — trades from before this column existed are honestly excluded."""
+    session = SessionLocal()
+    try:
+        rows = (
+            session.execute(
+                select(TradeOutcome).where(
+                    TradeOutcome.tp1_hit_at.is_not(None),
+                    TradeOutcome.entry_time.is_not(None),
+                )
+            )
+            .scalars()
+            .all()
+        )
+    finally:
+        session.close()
+
+    buckets = []
+    for lo, hi in _MOMENTUM_BUCKETS:
+        in_bucket = [r for r in rows if lo <= r.momentum_score < hi]
+        entry = {"momentum_range": f"{lo}-{hi}", "sample_size": len(in_bucket)}
+        if len(in_bucket) < min_sample:
+            entry["note"] = f"Need >= {min_sample} trades that reached TP1; have {len(in_bucket)}."
+        else:
+            minutes = [(r.tp1_hit_at - r.entry_time) / 60_000 for r in in_bucket]
+            entry["avg_minutes_to_tp1"] = round(statistics.mean(minutes), 1)
+        buckets.append(entry)
+
+    return {
+        "total_eligible": len(rows),
+        "buckets": buckets,
+        "note": (
+            "Distinct from momentum_vs_runup: tests whether maxed momentum "
+            "reaches TP1 faster, not whether it wins more. A component "
+            "can be 'good' on one axis and neutral on the other — this is "
+            "why they're separate reports, not combined into one number."
+        ),
+    }
+
+
 def open_trade_count() -> dict:
     """Live count for the performance dashboard's "Open Trades" tile —
     reads current TradeOutcome status, not a windowed query."""

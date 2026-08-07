@@ -476,6 +476,28 @@ computed score, not parsed from what Claude claims it is.
     visibly instead of silently. A real repeat call after both fixes
     completed cleanly in 76.1s (`stop_reason=end_turn`, 7295 output
     tokens, well under the new cap).
+  - **Entry timing extension**: `entry_indicators` gained
+    `distance_to_ema200_pct` and `atr_distance_to_ema20` (distance from
+    the fast EMA expressed in ATR units, not just raw % — "0.2 ATR above
+    EMA20" and "2 ATR above EMA20" are very different entries at the same
+    raw percentage on a low- vs high-volatility symbol). Distance to the
+    most recent BOS/FVG/swing-high/swing-low remains deferred for the same
+    reason as before — not surfaced by `compute_structure()`.
+  - **`tp1_hit_at`/`tp2_hit_at`/`tp3_hit_at`** (new nullable columns on
+    `TradeOutcome`): the first time each target was actually reached, set
+    once and never overwritten after. Answers a genuinely different
+    question from `tp1_hit` alone — does a maxed momentum score actually
+    LOSE more, or does it just reach TP1 FASTER (closing out the position
+    before this existed, those two were indistinguishable from the boolean
+    flag alone). `momentum_vs_time_to_tp1()`
+    (`GET /api/outcomes/momentum-time-to-tp1`) is the report built on top —
+    deliberately kept separate from `momentum_vs_runup()` rather than
+    merged into one number, since a component can be "good" on one axis
+    (speed) and neutral on the other (win rate). **Verified**: synthetic
+    test confirms the timestamp is set once on first hit and never mutated
+    by later cycles checking the same open trade; real production data
+    correctly shows 0 eligible trades (the field just landed, honestly not
+    backfilled).
 
 ## Roadmap — what's NOT implemented yet, and why
 

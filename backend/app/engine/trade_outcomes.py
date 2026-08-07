@@ -50,15 +50,28 @@ _COMPONENT_KEYWORDS = {
 
 
 def _capture_entry_indicators(features: dict) -> dict | None:
-    """RSI/stochRSI/ADX and distance to EMA20/EMA50 on the 4h timeframe, at
-    the moment the plan was issued — see TradeOutcome.entry_indicators for
-    what's deliberately NOT captured (BOS/FVG distance) and why."""
+    """RSI/stochRSI/ADX and distance to EMA20/EMA50/EMA200 on the 4h
+    timeframe, at the moment the plan was issued — "entry timing" raw
+    material: what did price look like relative to its recent trend right
+    before this specific trade was taken. Also expresses the EMA20
+    distance in ATR units (how many average true ranges away from the
+    fast EMA, not just a raw %) — "0.2 ATR above EMA20" and "2 ATR above
+    EMA20" are very different entries even at the same raw percentage
+    distance on a low-volatility vs high-volatility symbol.
+
+    See TradeOutcome.entry_indicators for what's deliberately NOT captured
+    (distance to the most recent BOS/FVG/swing-high/swing-low) and why —
+    compute_structure() (smart_money.py) never surfaces those price levels
+    through feature_builder.py, only per-candle booleans, so that distance
+    isn't computable without a real feature-builder change."""
     ind = features.get("indicators_4h")
     if not ind:
         return None
     last_close = ind.get("last_close")
     ema20 = ind.get("ema20")
     ema50 = ind.get("ema50")
+    ema200 = ind.get("ema200")
+    atr14 = ind.get("atr14")
     return {
         "rsi14": ind.get("rsi14"),
         "stoch_rsi": ind.get("stoch_rsi"),
@@ -68,6 +81,12 @@ def _capture_entry_indicators(features: dict) -> dict | None:
         ),
         "distance_to_ema50_pct": (
             round((last_close - ema50) / ema50 * 100, 3) if last_close and ema50 else None
+        ),
+        "distance_to_ema200_pct": (
+            round((last_close - ema200) / ema200 * 100, 3) if last_close and ema200 else None
+        ),
+        "atr_distance_to_ema20": (
+            round((last_close - ema20) / atr14, 3) if last_close and ema20 and atr14 else None
         ),
     }
 
@@ -289,6 +308,13 @@ def _update_one(row: TradeOutcome, price: float, now_ms: int) -> None:
     hit_tp1 = row.tp1 is not None and (price >= row.tp1 if is_long else price <= row.tp1)
     hit_tp2 = row.tp2 is not None and (price >= row.tp2 if is_long else price <= row.tp2)
     hit_tp3 = row.tp3 is not None and (price >= row.tp3 if is_long else price <= row.tp3)
+
+    if hit_tp1 and row.tp1_hit_at is None:
+        row.tp1_hit_at = now_ms
+    if hit_tp2 and row.tp2_hit_at is None:
+        row.tp2_hit_at = now_ms
+    if hit_tp3 and row.tp3_hit_at is None:
+        row.tp3_hit_at = now_ms
 
     row.tp1_hit = row.tp1_hit or hit_tp1
     row.tp2_hit = row.tp2_hit or hit_tp2

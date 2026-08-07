@@ -10,6 +10,7 @@ from app.engine.trade_reports import (
     feature_importance,
     grade_calibration,
     momentum_vs_runup,
+    momentum_vs_time_to_tp1,
     monthly_breakdown,
     open_trade_count,
     performance_digest,
@@ -67,6 +68,9 @@ def _serialize(row: TradeOutcome) -> dict:
         "prompt_version": row.prompt_version,
         "ml_model_version": row.ml_model_version,
         "entry_indicators": row.entry_indicators,
+        "tp1_hit_at": row.tp1_hit_at,
+        "tp2_hit_at": row.tp2_hit_at,
+        "tp3_hit_at": row.tp3_hit_at,
     }
 
 
@@ -171,6 +175,13 @@ async def momentum_runup_route(min_sample: int = Query(default=5)):
     entry predict WORSE forward movement (late/exhausted entries) rather
     than better? See app/engine/trade_reports.py:momentum_vs_runup."""
     return momentum_vs_runup(min_sample=min_sample)
+
+
+@router.get("/outcomes/momentum-time-to-tp1")
+async def momentum_time_to_tp1_route(min_sample: int = Query(default=5)):
+    """Does maxed momentum reach TP1 faster, independent of whether it
+    wins more? See app/engine/trade_reports.py:momentum_vs_time_to_tp1."""
+    return momentum_vs_time_to_tp1(min_sample=min_sample)
 
 
 @router.get("/outcomes/evidence-coverage")

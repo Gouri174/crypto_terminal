@@ -298,7 +298,7 @@ def test_entry_indicators_captured():
     FAKE_SYMBOLS.append(symbol)
     features_with_indicators = dict(FEATURES)
     features_with_indicators["indicators_4h"] = {
-        "last_close": 103.0, "ema20": 100.0, "ema50": 98.0,
+        "last_close": 103.0, "ema20": 100.0, "ema50": 98.0, "ema200": 90.0, "atr14": 2.5,
         "rsi14": 78.5, "stoch_rsi": 0.95, "adx14": 22.3,
     }
     plan = make_plan(symbol, entry_low=100.0, entry_high=101.0, stop_loss=97.0, tp1=105.0)
@@ -311,8 +311,12 @@ def test_entry_indicators_captured():
     assert row.entry_indicators["adx14"] == 22.3
     expected_dist_ema20 = round((103.0 - 100.0) / 100.0 * 100, 3)
     expected_dist_ema50 = round((103.0 - 98.0) / 98.0 * 100, 3)
+    expected_dist_ema200 = round((103.0 - 90.0) / 90.0 * 100, 3)
+    expected_atr_dist = round((103.0 - 100.0) / 2.5, 3)
     assert row.entry_indicators["distance_to_ema20_pct"] == expected_dist_ema20
     assert row.entry_indicators["distance_to_ema50_pct"] == expected_dist_ema50
+    assert row.entry_indicators["distance_to_ema200_pct"] == expected_dist_ema200
+    assert row.entry_indicators["atr_distance_to_ema20"] == expected_atr_dist
     print(f"[PASS] entry_indicators captured correctly: {row.entry_indicators}")
 
     # missing indicators_4h (e.g. a feature-build partial failure) -> None, not a crash
@@ -324,6 +328,44 @@ def test_entry_indicators_captured():
     row2 = get_row(symbol2)
     assert row2.entry_indicators is None
     print("[PASS] entry_indicators is None (not a crash) when indicators_4h is missing")
+
+
+def test_tp_hit_timestamps():
+    """tp1_hit_at must be set the FIRST cycle TP1 is reached and never
+    change after that, even as later cycles keep checking the same
+    already-open trade."""
+    symbol = FAKE_SYMBOLS[1] + "G"
+    FAKE_SYMBOLS.append(symbol)
+    plan = make_plan(symbol, entry_low=100.0, entry_high=101.0, stop_loss=97.0, tp1=105.0, tp2=110.0)
+    trade_outcomes.open_trade_outcome(symbol, plan, BREAKDOWN, FEATURES, HISTORY_STATS,
+                                       ML_PREDICTION, REGIME, now_ms=8_000_000)
+    trade_outcomes.update_open_trades({symbol: 100.5}, now_ms=8_060_000)  # opens
+    row = get_row(symbol)
+    assert row.tp1_hit_at is None
+
+    trade_outcomes.update_open_trades({symbol: 106.0}, now_ms=8_120_000)  # tp1 hit
+    row = get_row(symbol)
+    assert row.tp1_hit_at == 8_120_000, row.tp1_hit_at
+    assert row.tp2_hit_at is None
+
+    trade_outcomes.update_open_trades({symbol: 107.0}, now_ms=8_180_000)  # still above tp1, below tp2
+    row = get_row(symbol)
+    assert row.tp1_hit_at == 8_120_000, "tp1_hit_at must not change once set"
+
+    trade_outcomes.update_open_trades({symbol: 111.0}, now_ms=8_240_000)  # tp2 hit -> closes
+    row = get_row(symbol)
+    assert row.tp2_hit_at == 8_240_000, row.tp2_hit_at
+    assert row.tp1_hit_at == 8_120_000, "tp1_hit_at still preserved after close"
+    print(f"[PASS] tp1_hit_at/tp2_hit_at set once and never overwritten: "
+          f"tp1={row.tp1_hit_at}, tp2={row.tp2_hit_at}")
+
+    result = trade_reports.momentum_vs_time_to_tp1(min_sample=1)
+    assert result["total_eligible"] >= 1, result
+    bucket = next(b for b in result["buckets"] if b["momentum_range"] == "9-12")  # BREAKDOWN momentum=10
+    assert bucket["sample_size"] >= 1, bucket
+    assert "avg_minutes_to_tp1" in bucket, bucket
+    expected_minutes = (8_120_000 - 8_060_000) / 60_000
+    print(f"[PASS] momentum_vs_time_to_tp1: {result} (this trade: {expected_minutes} min to TP1)")
 
 
 def test_momentum_runup_and_evidence_coverage():
@@ -398,6 +440,7 @@ if __name__ == "__main__":
         test_confidence_grade_persisted()
         test_prediction_snapshots()
         test_entry_indicators_captured()
+        test_tp_hit_timestamps()
         test_momentum_runup_and_evidence_coverage()
         test_calibration_and_signals_summary()
         test_reports()
