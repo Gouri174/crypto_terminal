@@ -52,8 +52,6 @@ export default function CoinDetailPage({
 
       {data.regime && <div className="mt-4"><RegimeBanner regime={data.regime} /></div>}
 
-      <ChartPanel symbol={data.symbol} />
-
       <div className="rounded-lg border border-border bg-panel p-6">
         <div className="flex items-center justify-between mb-1">
           <h1 className="text-2xl font-bold">{data.symbol}</h1>
@@ -103,13 +101,23 @@ export default function CoinDetailPage({
           </div>
         )}
 
+        <ChartPanel symbol={data.symbol} />
+
         {Object.keys(plan.checklist).length > 0 && (
           <Section title="Market Checklist">
-            <div className="grid grid-cols-2 sm:grid-cols-4 gap-2 text-sm">
+            <div className="space-y-1.5">
               {Object.entries(plan.checklist).map(([key, passed]) => (
-                <div key={key} className="flex items-center gap-1.5">
-                  <span className={passed ? "text-bull" : "text-bear"}>{passed ? "✓" : "✗"}</span>
-                  <span className="text-gray-400 capitalize">{key.replace(/_/g, " ")}</span>
+                <div key={key} className="flex items-center gap-3 text-sm">
+                  <div className="w-32 text-gray-400 shrink-0 capitalize">{key.replace(/_confirms|_acceptable/g, "").replace(/_/g, " ")}</div>
+                  <div className="flex-1 h-2 rounded bg-border overflow-hidden">
+                    <div
+                      className={passed ? "h-full bg-bull" : "h-full bg-bear"}
+                      style={{ width: passed ? "100%" : "28%" }}
+                    />
+                  </div>
+                  <div className={`w-14 text-right text-xs uppercase font-semibold ${passed ? "text-bull" : "text-bear"}`}>
+                    {passed ? "Pass" : "Fail"}
+                  </div>
                 </div>
               ))}
             </div>
@@ -148,7 +156,7 @@ export default function CoinDetailPage({
         )}
 
         <Section title="AI Summary">
-          <p className="text-gray-300">{plan.summary}</p>
+          <ExpandableSummary text={plan.summary} />
         </Section>
 
         {plan.reasons_for.length > 0 && (
@@ -361,6 +369,27 @@ function ScoreBars({ breakdown }: { breakdown: ScoreBreakdown }) {
   );
 }
 
+function ExpandableSummary({ text }: { text: string }) {
+  const [expanded, setExpanded] = useState(false);
+  const COLLAPSE_AT = 260;
+  const needsCollapse = text.length > COLLAPSE_AT;
+  const shown = expanded || !needsCollapse ? text : text.slice(0, COLLAPSE_AT).trimEnd() + "…";
+
+  return (
+    <div>
+      <p className="text-gray-300">{shown}</p>
+      {needsCollapse && (
+        <button
+          onClick={() => setExpanded((e) => !e)}
+          className="text-xs text-gray-500 hover:text-gray-300 mt-1 underline"
+        >
+          {expanded ? "Show less" : "Show more"}
+        </button>
+      )}
+    </div>
+  );
+}
+
 function HistoryMatchCard({
   match,
 }: {
@@ -368,19 +397,30 @@ function HistoryMatchCard({
 }) {
   return (
     <div className="space-y-4">
-      <div className="grid grid-cols-2 sm:grid-cols-3 gap-4 text-sm">
-        <Field label="Similar situations found" value={match.sample_size} />
-        <Field label="Of history available" value={match.total_history_available} />
-        <Field label="Win rate" value={`${match.win_rate}%`} />
-        {match.largest_gain_pct != null && (
-          <Field label="Largest gain" value={`+${match.largest_gain_pct}%`} />
-        )}
-        {match.largest_loss_pct != null && (
-          <Field label="Largest loss" value={`${match.largest_loss_pct}%`} />
-        )}
-        {match.avg_drawdown_pct != null && (
-          <Field label="Avg drawdown" value={`${match.avg_drawdown_pct}%`} />
-        )}
+      <div className="rounded border border-border bg-black/20 p-4">
+        <div className="text-xs text-gray-500 mb-2">
+          {match.sample_size} Similar Trades (of {match.total_history_available} available)
+        </div>
+        <div className="flex items-center gap-3 mb-3">
+          <div className="flex-1 h-3 rounded bg-border overflow-hidden">
+            <div className="h-full bg-bull" style={{ width: `${match.win_rate}%` }} />
+          </div>
+          <div className="text-bull text-sm font-semibold tabular-nums w-16 text-right">
+            {match.win_rate}% Won
+          </div>
+        </div>
+        <div className="grid grid-cols-2 sm:grid-cols-4 gap-4 text-sm">
+          <Field label="Average Return" value={`${match.mean_return_pct >= 0 ? "+" : ""}${match.mean_return_pct}%`} />
+          {match.avg_drawdown_pct != null && (
+            <Field label="Average Drawdown" value={`${match.avg_drawdown_pct}%`} />
+          )}
+          {match.largest_gain_pct != null && (
+            <Field label="Best" value={`+${match.largest_gain_pct}%`} />
+          )}
+          {match.largest_loss_pct != null && (
+            <Field label="Worst" value={`${match.largest_loss_pct}%`} />
+          )}
+        </div>
       </div>
 
       {match.horizon_returns.length > 0 && (
