@@ -154,7 +154,31 @@ def monthly_breakdown(start_ms: int, end_ms: int) -> dict:
         "worst_strategy": _worst(by_strategy),
         "highest_accuracy_timeframe": _best(by_timeframe_winrate),
         "best_market_regime": _best(by_regime_winrate),
+        "by_direction": direction_breakdown(start_ms, end_ms),
     }
+
+
+def direction_breakdown(start_ms: int, end_ms: int) -> dict:
+    """"Are shorts performing better than longs?" — monthly_breakdown groups
+    by timeframe+direction combined (e.g. "swing long"); this groups by
+    direction ALONE, which is the more direct question. Gated behind
+    _MIN_GROUP_SAMPLE per side."""
+    rows = [r for r in _resolved_in_window(start_ms, end_ms) if r.status in ("closed_win", "closed_loss")]
+    by_direction = _group_win_rate(rows, lambda r: r.direction)
+    returns_by_direction = _group_avg_return(rows, lambda r: r.direction)
+    result = {}
+    for direction in ("long", "short"):
+        win = by_direction.get(direction)
+        ret = returns_by_direction.get(direction)
+        if win is None or ret is None:
+            result[direction] = {"note": f"Need >= {_MIN_GROUP_SAMPLE} resolved {direction} trades."}
+        else:
+            result[direction] = {
+                "sample_size": win["sample_size"],
+                "win_rate_pct": win["win_rate_pct"],
+                "avg_return_pct": ret["avg_return_pct"],
+            }
+    return result
 
 
 def _group_avg_return(rows: list[TradeOutcome], key_fn) -> dict[str, dict]:

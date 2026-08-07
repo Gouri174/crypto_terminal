@@ -499,6 +499,64 @@ computed score, not parsed from what Claude claims it is.
     correctly shows 0 eligible trades (the field just landed, honestly not
     backfilled).
 
+- **AI research assistant** (`app/engine/ask_router.py`, `POST /api/ask`):
+  the old `/api/ask` regex-extracted a symbol and dumped its raw live
+  indicator features into a free-form Claude prompt — it never touched
+  `TradeOutcome`, `PredictionSnapshot`, or any calibration/diagnostic
+  report, so Claude was answering from the same data a trade card already
+  shows, not reasoning over the system's actual track record. Rewritten so
+  Claude explains real data instead of guessing:
+  - **Deterministic router, not NLU**: `classify()` keyword-matches the
+    question into zero or more fixed categories (best trades today,
+    current trades, system accuracy, confidence/grade calibration, feature
+    importance, momentum patterns, long-vs-short, regime performance,
+    retrain recommendation) and `gather_context()` calls the matching
+    report functions BEFORE any Claude call — Claude only ever sees
+    already-computed numbers, never live market data it could hallucinate
+    around. A "today"/"this week"/"this month"/"90 day" phrase in the
+    question sets the report window (defaults to 30 days).
+  - **Symbol matching is a whitelist, not a blocklist** — found live while
+    testing: an early version flagged any 2-15 char uppercase word as a
+    ticker candidate and filtered common English words with a stopword
+    list, which broke immediately ("PERFORMING" → "PERFORMINGUSDT",
+    "SUIUSDT" typed by the user → doubled to "SUIUSDTUSDT"). Fixed by
+    matching only against symbols that actually exist in `TradeOutcome`/
+    `LiveOpportunity` (cached 5 min) — a word that isn't a real tracked
+    symbol is silently ignored instead of guessed at.
+  - **Research system prompt**: explicitly forbids stating any number not
+    present in the provided data block, requires repeating a report's own
+    "sample size too small" note rather than drawing a conclusion anyway,
+    and requires surfacing unflattering results (e.g. an unprofitable
+    system) directly rather than softening them.
+  - **Verified live** against the real dev DB (4 resolved trades): asked
+    "How is the system performing overall — is it profitable?" and got
+    back the real 25% win rate, 1.23 profit factor, 0.09 Sharpe, and an
+    explicit caveat that a single trade (CYSUSDT +19.67%) is carrying the
+    whole result — not a vague "looks okay." Asked "Should I retrain the
+    ML model yet?" and got back the real retrain-recommendation refusal
+    (4 resolved trades vs the 200 minimum) with no invented numbers.
+  - **Deliberately deferred**: a frontend "AI Research Assistant" chat page
+    — the backend endpoint (`POST /api/ask`) is what a future page would
+    call; no UI built yet.
+- **Retrain recommendation** (`app/engine/ml_retrain.py:retrain_recommendation`,
+  `GET /api/ml/retrain-recommendation`): a reminder, not an action — never
+  retrains anything itself. Fixed rule: never recommend before 200 total
+  resolved `TradeOutcome` rows exist at all; after that, only once BOTH 50
+  new resolutions have accumulated since the last train AND 30 days have
+  passed since it ("whichever comes later" — neither a fast trickle of
+  trades nor the calendar alone is enough alone). Reuses
+  `ml_retrain.py`'s existing `metadata.json`, extended with a
+  `trade_outcomes_resolved_at_train` snapshot written on every train so a
+  later call can compute "how many new resolutions since we last checked."
+  Honest limitation stated in its own docstring: this counts `TradeOutcome`
+  resolutions as the "is there new signal" trigger, but `train_models()`
+  itself still trains on backfilled `MarketSnapshot` candle history, not
+  `TradeOutcome` rows directly — training ON the system's own live outcomes
+  is a separate, larger project this function does not claim to do.
+  **Verified live**: real dev DB currently has 4 resolved trades, correctly
+  returns `{"recommend": false, "reason": "Only 4 resolved trades; need >=
+  200..."}`.
+
 ## Roadmap — what's NOT implemented yet, and why
 
 This follows a phased build rather than attempting everything at once:

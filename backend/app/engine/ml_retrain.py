@@ -21,15 +21,32 @@ import json
 import time
 from pathlib import Path
 
+from sqlalchemy import func, select
+
+from app.db import SessionLocal
 from app.engine import ml_model
+from app.models.db_models import TradeOutcome
 
 METADATA_PATH: Path = ml_model.MODEL_DIR / "metadata.json"
+_RESOLVED_TRADE_STATUSES = ("closed_win", "closed_loss", "closed_stale")
 
 
 def _load_deployed_metadata() -> dict | None:
     if not METADATA_PATH.exists():
         return None
     return json.loads(METADATA_PATH.read_text())
+
+
+def _count_resolved_trade_outcomes() -> int:
+    session = SessionLocal()
+    try:
+        return session.execute(
+            select(func.count())
+            .select_from(TradeOutcome)
+            .where(TradeOutcome.status.in_(_RESOLVED_TRADE_STATUSES))
+        ).scalar_one()
+    finally:
+        session.close()
 
 
 def _save_metadata(result: dict) -> None:
@@ -41,6 +58,10 @@ def _save_metadata(result: dict) -> None:
                 "win_model_test_auc": result.get("win_model_test_auc"),
                 "drawdown_model_test_auc": result.get("drawdown_model_test_auc"),
                 "total_samples": result.get("total_samples"),
+                # Snapshot of the TradeOutcome resolved-count AT this train
+                # — the reference point retrain_recommendation() measures
+                # "how much new activity since we last checked" against.
+                "trade_outcomes_resolved_at_train": _count_resolved_trade_outcomes(),
             },
             indent=2,
         )
@@ -94,3 +115,68 @@ def retrain_if_better(min_samples: int = 200, tolerance: float = 0.0) -> dict:
 
     _save_metadata(result)
     return {**result, "deployed": True, "previous_win_model_test_auc": deployed_auc}
+
+
+def retrain_recommendation(
+    bootstrap_min: int = 200, new_trades_threshold: int = 50, days_threshold: int = 30
+) -> dict:
+    """A REMINDER, not an action — never retrains anything itself, never
+    touches scoring. Rule: never recommend before `bootstrap_min` total
+    resolved TradeOutcome rows exist at all. After that, recommend only
+    once BOTH `new_trades_threshold` new resolutions have accumulated
+    since the last train AND `days_threshold` days have passed — "whichever
+    comes later," i.e. neither a fast trickle of trades nor the calendar
+    alone is sufficient on its own to justify retraining on a real
+    schedule.
+
+    Honest limitation: this counts TradeOutcome resolutions as the "is
+    there enough new signal to check in" trigger, but train_models() itself
+    still trains on backfilled MarketSnapshot candle data, not TradeOutcome
+    rows directly — training ON the system's own live outcomes is a
+    separate, larger project this function does not claim to do."""
+    total_resolved = _count_resolved_trade_outcomes()
+
+    if total_resolved < bootstrap_min:
+        return {
+            "recommend": False,
+            "reason": (
+                f"Only {total_resolved} resolved trades; need >= {bootstrap_min} "
+                "before retraining is worth considering at all."
+            ),
+            "total_resolved_trades": total_resolved,
+        }
+
+    deployed = _load_deployed_metadata()
+    if deployed is None or deployed.get("trained_at") is None:
+        return {
+            "recommend": True,
+            "reason": "No model has been trained yet, and enough resolved trades exist to start.",
+            "total_resolved_trades": total_resolved,
+        }
+
+    resolved_at_train = deployed.get("trade_outcomes_resolved_at_train", 0)
+    new_since_train = total_resolved - resolved_at_train
+    days_since_train = (time.time() * 1000 - deployed["trained_at"]) / 86_400_000
+
+    meets_count = new_since_train >= new_trades_threshold
+    meets_days = days_since_train >= days_threshold
+    recommend = meets_count and meets_days
+
+    return {
+        "recommend": recommend,
+        "reason": (
+            "Retraining is now worthwhile."
+            if recommend
+            else (
+                f"Not yet — need both >= {new_trades_threshold} new resolved trades "
+                f"(have {new_since_train}) AND >= {days_threshold} days since last "
+                f"train (have {days_since_train:.1f})."
+            )
+        ),
+        "total_resolved_trades": total_resolved,
+        "new_resolved_since_last_train": new_since_train,
+        "days_since_last_train": round(days_since_train, 1),
+        "current_model_version": deployed.get("model_version"),
+        "current_model_test_auc": deployed.get("win_model_test_auc"),
+        "estimated_benefit": "Unknown until validation — retrain_if_better() will refuse to deploy a worse model.",
+    }
