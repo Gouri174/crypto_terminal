@@ -3,6 +3,31 @@ import type { ChartData } from "./chart-types";
 
 const API_BASE_URL = process.env.NEXT_PUBLIC_API_BASE_URL || "http://localhost:8000";
 
+export interface AskResponse {
+  answer: string;
+  categories_matched: string[];
+  symbols_used: string[];
+  data: Record<string, unknown>;
+}
+
+/**
+ * Research-assistant call — the question is classified deterministically
+ * and answered from real TradeOutcome/report data server-side (see
+ * app/engine/ask_router.py). `data` is the exact JSON Claude was grounded
+ * in, returned so the UI can show it for verification rather than asking
+ * the user to trust the prose alone.
+ */
+export async function askAssistant(question: string): Promise<AskResponse> {
+  const res = await fetch(`${API_BASE_URL}/api/ask`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ question }),
+    cache: "no-store",
+  });
+  if (!res.ok) throw new Error(`Failed to get an answer: ${res.status}`);
+  return res.json();
+}
+
 export async function fetchOpportunities(limit = 6): Promise<Opportunity[]> {
   const res = await fetch(`${API_BASE_URL}/api/opportunities?limit=${limit}`, {
     cache: "no-store",
