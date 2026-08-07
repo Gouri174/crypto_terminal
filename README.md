@@ -432,6 +432,50 @@ computed score, not parsed from what Claude claims it is.
     open trade) is pure UI work on top of what's now built, not started
     yet; chart annotation decluttering (fading older BOS/CHoCH/FVG
     markers) touches chart-generation code untouched by this pass.
+- **Research diagnostics** — built after inspecting the first 3 real
+  resolved trades (all losses) and finding a real, honest caveat: they
+  were all created during this session's own manual pipeline testing
+  (forced re-explanations within a short window), not organic operation,
+  so treating "0% win rate" as a system-quality verdict would have been
+  wrong. Built the tools to actually investigate instead of guessing:
+  - **`momentum_vs_runup()`** (`GET /api/outcomes/momentum-runup`): tests
+    a specific hypothesis — does a maxed-out `momentum_score` at entry
+    predict WORSE forward movement (late/exhausted entries) rather than
+    better (clean confirmation)? Buckets resolved trades by momentum
+    score, reports average MFE/MAE and win rate per bucket. Zero schema
+    change — pure analysis over `momentum_score`/`max_runup_pct`, both
+    already stored.
+  - **`evidence_coverage()`** (`GET /api/outcomes/evidence-coverage`): of
+    the sources that can genuinely be unavailable for a given symbol (ML
+    prediction, historical similarity, sentiment — NOT trend/momentum/
+    volume/structure/funding/regime, which are always computed once
+    features exist), how often did each actually participate, and does
+    coverage correlate with outcome? A trade scored with zero ML/history
+    backing carries more uncertainty than the raw score alone shows.
+  - **`entry_indicators`** (new JSON column on `TradeOutcome`): RSI/
+    stochRSI/ADX and distance to EMA20/EMA50 on the 4h timeframe, captured
+    at the moment each plan is issued — the raw material for a future
+    "false breakout" investigation (what do losing setups have in common
+    right before they fail). Deliberately does NOT include distance to
+    the most recent BOS/FVG price level: `compute_structure()`
+    (`smart_money.py`) only ever surfaces per-candle booleans through
+    `feature_builder.py`, never the swing-high/low level itself, so that
+    specific distance isn't computable without a real feature-builder
+    change — left out rather than faked. **Verified live**: a real fresh
+    XAUUSDT trade captured real RSI 81.4 / stochRSI 0.75 / ADX 45.9 /
+    +2.4% from EMA20 at entry.
+  - **Found and fixed via this exact live test**: `BATCH_MAX_TOKENS_CAP`
+    was 8000 — lower than a realistic full 6-symbol batch's actual need
+    (6 × 2500 = 15000). A 6-symbol batch got silently truncated mid-array
+    (invalid JSON, "Expecting ',' delimiter"), losing the ENTIRE batch
+    including symbols whose own item would have parsed fine. Raised with
+    real headroom above `LLM_CANDIDATES`'s worst case. Also found: the
+    Anthropic client had no explicit timeout, and one live call hung for
+    20+ minutes with no error before this was caught — added
+    `timeout=120.0` and call-duration logging so a hang fails fast and
+    visibly instead of silently. A real repeat call after both fixes
+    completed cleanly in 76.1s (`stop_reason=end_turn`, 7295 output
+    tokens, well under the new cap).
 
 ## Roadmap — what's NOT implemented yet, and why
 

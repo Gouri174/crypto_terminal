@@ -293,6 +293,57 @@ def test_prediction_snapshots():
           f"pnl/distance math correct, earlier rows never mutated")
 
 
+def test_entry_indicators_captured():
+    symbol = FAKE_SYMBOLS[0] + "E"
+    FAKE_SYMBOLS.append(symbol)
+    features_with_indicators = dict(FEATURES)
+    features_with_indicators["indicators_4h"] = {
+        "last_close": 103.0, "ema20": 100.0, "ema50": 98.0,
+        "rsi14": 78.5, "stoch_rsi": 0.95, "adx14": 22.3,
+    }
+    plan = make_plan(symbol, entry_low=100.0, entry_high=101.0, stop_loss=97.0, tp1=105.0)
+    trade_outcomes.open_trade_outcome(symbol, plan, BREAKDOWN, features_with_indicators, HISTORY_STATS,
+                                       ML_PREDICTION, REGIME, now_ms=7_000_000)
+    row = get_row(symbol)
+    assert row.entry_indicators is not None
+    assert row.entry_indicators["rsi14"] == 78.5
+    assert row.entry_indicators["stoch_rsi"] == 0.95
+    assert row.entry_indicators["adx14"] == 22.3
+    expected_dist_ema20 = round((103.0 - 100.0) / 100.0 * 100, 3)
+    expected_dist_ema50 = round((103.0 - 98.0) / 98.0 * 100, 3)
+    assert row.entry_indicators["distance_to_ema20_pct"] == expected_dist_ema20
+    assert row.entry_indicators["distance_to_ema50_pct"] == expected_dist_ema50
+    print(f"[PASS] entry_indicators captured correctly: {row.entry_indicators}")
+
+    # missing indicators_4h (e.g. a feature-build partial failure) -> None, not a crash
+    symbol2 = FAKE_SYMBOLS[0] + "F"
+    FAKE_SYMBOLS.append(symbol2)
+    plan2 = make_plan(symbol2, entry_low=100.0, entry_high=101.0, stop_loss=97.0, tp1=105.0)
+    trade_outcomes.open_trade_outcome(symbol2, plan2, BREAKDOWN, FEATURES, HISTORY_STATS,
+                                       ML_PREDICTION, REGIME, now_ms=7_060_000)
+    row2 = get_row(symbol2)
+    assert row2.entry_indicators is None
+    print("[PASS] entry_indicators is None (not a crash) when indicators_4h is missing")
+
+
+def test_momentum_runup_and_evidence_coverage():
+    result = trade_reports.momentum_vs_runup(min_sample=1)
+    assert "buckets" in result and len(result["buckets"]) == 5, result
+    # our BREAKDOWN fixture always uses momentum=10.0 -> falls in the 9-12 bucket
+    bucket = next(b for b in result["buckets"] if b["momentum_range"] == "9-12")
+    assert bucket["sample_size"] >= 1, bucket
+    print(f"[PASS] momentum_vs_runup: {result}")
+
+    coverage = trade_reports.evidence_coverage(min_sample=1)
+    assert "win_rate_by_coverage_level" in coverage, coverage
+    assert len(coverage["win_rate_by_coverage_level"]) == 4
+    # ML_PREDICTION/HISTORY_STATS/FEATURES fixtures all provide data ->
+    # most of our test trades should show full 3/3 coverage
+    full_coverage = next(l for l in coverage["win_rate_by_coverage_level"] if l["sources_available"] == 3)
+    assert full_coverage["sample_size"] >= 1, full_coverage
+    print(f"[PASS] evidence_coverage: {coverage}")
+
+
 def test_calibration_and_signals_summary():
     # confidence_calibration/grade_calibration read ALL resolved trades in
     # the DB (not windowed), so assert on structure/gating rather than
@@ -346,6 +397,8 @@ if __name__ == "__main__":
         test_invalidation_on_new_plan()
         test_confidence_grade_persisted()
         test_prediction_snapshots()
+        test_entry_indicators_captured()
+        test_momentum_runup_and_evidence_coverage()
         test_calibration_and_signals_summary()
         test_reports()
         print("\nALL TESTS PASSED")

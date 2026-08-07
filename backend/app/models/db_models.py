@@ -221,6 +221,17 @@ class TradeOutcome(Base):
     prompt_version: Mapped[str | None] = mapped_column(String(20), nullable=True)
     ml_model_version: Mapped[str | None] = mapped_column(String(20), nullable=True)
 
+    # Raw indicator readings at the moment the plan was issued — the "False
+    # Breakout Report" raw material. Deliberately does NOT include distance
+    # to the most recent BOS/FVG: compute_structure() (smart_money.py) only
+    # ever surfaces per-candle booleans through feature_builder.py, never
+    # the swing-high/low price level itself, so that distance genuinely
+    # isn't computable without a separate feature-builder change — not
+    # included here rather than faked. Shape: {"rsi14", "stoch_rsi",
+    # "adx14", "distance_to_ema20_pct", "distance_to_ema50_pct"}, all on
+    # the 4h timeframe (matching SIMILARITY_INTERVAL elsewhere).
+    entry_indicators: Mapped[dict | None] = mapped_column(JSON, nullable=True)
+
 
 class PredictionSnapshot(Base):
     """One deterministic validation check of an OPEN TradeOutcome, recorded

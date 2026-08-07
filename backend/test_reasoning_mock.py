@@ -60,6 +60,10 @@ MOCK_CLAUDE_JSON = {
 }
 
 
+class FakeUsage:
+    output_tokens = 100
+
+
 class FakeTextBlock:
     type = "text"
     text = json.dumps(MOCK_CLAUDE_JSON)
@@ -67,6 +71,8 @@ class FakeTextBlock:
 
 class FakeResponse:
     content = [FakeTextBlock()]
+    stop_reason = "end_turn"
+    usage = FakeUsage()
 
 
 def test_full_pipeline():
@@ -153,6 +159,8 @@ class FakeArrayTextBlock:
 
 class FakeArrayResponse:
     content = [FakeArrayTextBlock()]
+    stop_reason = "end_turn"
+    usage = FakeUsage()
 
 
 def test_batch_pipeline():
@@ -203,6 +211,8 @@ def test_batch_skips_unrecognized_and_reports_missing():
 
     class PartialResponse:
         content = [PartialTextBlock()]
+        stop_reason = "end_turn"
+        usage = FakeUsage()
 
     with patch.object(reasoning._client.messages, "create", return_value=PartialResponse()):
         plans = reasoning.analyze_batch(items, REGIME)

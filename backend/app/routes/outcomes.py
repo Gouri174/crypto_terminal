@@ -6,8 +6,10 @@ from sqlalchemy import select
 from app.db import SessionLocal
 from app.engine.trade_reports import (
     confidence_calibration,
+    evidence_coverage,
     feature_importance,
     grade_calibration,
+    momentum_vs_runup,
     monthly_breakdown,
     open_trade_count,
     performance_digest,
@@ -64,6 +66,7 @@ def _serialize(row: TradeOutcome) -> dict:
         "score_formula_version": row.score_formula_version,
         "prompt_version": row.prompt_version,
         "ml_model_version": row.ml_model_version,
+        "entry_indicators": row.entry_indicators,
     }
 
 
@@ -160,6 +163,22 @@ async def confidence_calibration_route(min_sample: int = Query(default=5)):
 @router.get("/outcomes/calibration/grade")
 async def grade_calibration_route(min_sample: int = Query(default=5)):
     return grade_calibration(min_sample=min_sample)
+
+
+@router.get("/outcomes/momentum-runup")
+async def momentum_runup_route(min_sample: int = Query(default=5)):
+    """Tests a specific hypothesis: does a maxed-out momentum score at
+    entry predict WORSE forward movement (late/exhausted entries) rather
+    than better? See app/engine/trade_reports.py:momentum_vs_runup."""
+    return momentum_vs_runup(min_sample=min_sample)
+
+
+@router.get("/outcomes/evidence-coverage")
+async def evidence_coverage_route(min_sample: int = Query(default=5)):
+    """How often ML/historical-similarity/sentiment evidence actually
+    participated in a trade's score, and whether coverage correlates with
+    outcome. See app/engine/trade_reports.py:evidence_coverage."""
+    return evidence_coverage(min_sample=min_sample)
 
 
 @router.get("/outcomes/{trade_outcome_id}/snapshots")

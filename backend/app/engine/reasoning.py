@@ -1,14 +1,20 @@
 import json
 import re
+import time
 
 import anthropic
 
-from app.config import ANTHROPIC_MAX_TOKENS, ANTHROPIC_MAX_TOKENS_SHORT, ANTHROPIC_MODEL
+from app.config import ANTHROPIC_MAX_TOKENS, ANTHROPIC_MAX_TOKENS_SHORT, ANTHROPIC_MODEL, LLM_CANDIDATES
 from app.engine.confidence import compute_confidence
 from app.engine.decision import decide_direction, market_checklist, trade_grade
 from app.models.schemas import ConfidenceBreakdown, HistoryMatch, MLPrediction, ScoreBreakdown, TradePlan
 
-_client = anthropic.Anthropic()
+# Explicit timeout: found live that the SDK's default let a call hang for
+# 20+ minutes with no error and no completion — for a background scanner
+# that's supposed to cycle every few minutes, a silent multi-minute hang is
+# worse than a fast, visible failure the loop's own except-and-retry
+# already handles.
+_client = anthropic.Anthropic(timeout=120.0)
 
 # Bump on any change to what Claude is asked to decide vs. explain, or to
 # the JSON contract — recorded on every TradeOutcome row. "2.0" marks the
@@ -298,8 +304,14 @@ def analyze_symbol(
 
 # Batch calls are capped rather than letting the budget grow unbounded with
 # more symbols — a genuinely huge batch should split into two calls, not
-# one call asking for an enormous single response.
-BATCH_MAX_TOKENS_CAP = 8000
+# one call asking for an enormous single response. Found live, not
+# theoretical: the previous cap (8000) was LOWER than a realistic full
+# batch's actual need (LLM_CANDIDATES=6 all at full schema = 6*2500=15000),
+# so a 6-symbol batch got silently truncated mid-array — invalid JSON,
+# "Expecting ',' delimiter" — and the ENTIRE batch was lost, including
+# symbols whose own item would have parsed fine. Sized with real headroom
+# above LLM_CANDIDATES' worst case instead of a round number.
+BATCH_MAX_TOKENS_CAP = max(20000, LLM_CANDIDATES * ANTHROPIC_MAX_TOKENS + 2000)
 
 
 def build_batch_user_prompt(pre_items: list[dict], regime: dict | None) -> str:
@@ -352,6 +364,8 @@ def analyze_batch(items: list[dict], regime: dict | None = None) -> dict[str, Tr
     budget = sum(ANTHROPIC_MAX_TOKENS_SHORT if p["grade"] in _LOW_GRADES else ANTHROPIC_MAX_TOKENS for p in pre_items)
     max_tokens = min(budget, BATCH_MAX_TOKENS_CAP)
 
+    _start = time.time()
+    print(f"[reasoning] batch call starting: {len(items)} symbols, max_tokens={max_tokens}")
     response = _client.messages.create(
         model=ANTHROPIC_MODEL,
         max_tokens=max_tokens,
@@ -359,11 +373,21 @@ def analyze_batch(items: list[dict], regime: dict | None = None) -> dict[str, Tr
         system=SYSTEM_PROMPT + BATCH_ADDENDUM,
         messages=[{"role": "user", "content": build_batch_user_prompt(pre_items, regime)}],
     )
+    print(
+        f"[reasoning] batch call finished in {time.time() - _start:.1f}s, "
+        f"stop_reason={response.stop_reason}, output_tokens={response.usage.output_tokens}"
+    )
     text = next((b.text for b in response.content if b.type == "text"), "")
     match = _JSON_ARRAY_RE.search(text)
     if not match:
         raise ValueError(f"No JSON array found in batch model response: {text[:500]!r}")
-    raw_items = json.loads(match.group(0))
+    try:
+        raw_items = json.loads(match.group(0))
+    except json.JSONDecodeError as exc:
+        raise ValueError(
+            f"Malformed JSON array in batch response ({exc}); "
+            f"stop_reason={response.stop_reason}, text_length={len(text)}"
+        ) from exc
 
     by_symbol = {p["symbol"]: p for p in pre_items}
     results: dict[str, TradePlan] = {}

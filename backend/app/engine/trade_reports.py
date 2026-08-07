@@ -410,6 +410,119 @@ def signals_issued_summary(start_ms: int, end_ms: int, label: str) -> dict:
     return result
 
 
+_MOMENTUM_BUCKETS = [(0, 3), (3, 6), (6, 9), (9, 12), (12, 16)]
+
+
+def momentum_vs_runup(min_sample: int = 5) -> dict:
+    """Tests a specific hypothesis, not a general diagnostic: does a maxed-
+    out momentum_score at entry correlate with LESS favorable movement
+    before exit (late/exhausted entries), or more (clean confirmation)?
+    Pure analysis over columns TradeOutcome already stores (momentum_score,
+    max_runup_pct) — no new capture, no schema change. Gated per-bucket
+    behind min_sample; with few resolved trades this is noise, not a
+    finding, which is why it says so rather than drawing a curve from 3
+    points."""
+    session = SessionLocal()
+    try:
+        rows = (
+            session.execute(
+                select(TradeOutcome).where(
+                    TradeOutcome.status.in_(["closed_win", "closed_loss"]),
+                    TradeOutcome.max_runup_pct.is_not(None),
+                )
+            )
+            .scalars()
+            .all()
+        )
+    finally:
+        session.close()
+
+    buckets = []
+    for lo, hi in _MOMENTUM_BUCKETS:
+        in_bucket = [r for r in rows if lo <= r.momentum_score < hi]
+        entry = {"momentum_range": f"{lo}-{hi}", "sample_size": len(in_bucket)}
+        if len(in_bucket) < min_sample:
+            entry["note"] = f"Need >= {min_sample} resolved trades; have {len(in_bucket)}."
+        else:
+            entry["avg_max_runup_pct"] = round(statistics.mean(r.max_runup_pct for r in in_bucket), 3)
+            entry["avg_max_drawdown_pct"] = round(
+                statistics.mean(r.max_drawdown_pct for r in in_bucket if r.max_drawdown_pct is not None), 3
+            )
+            entry["win_rate_pct"] = round(
+                sum(1 for r in in_bucket if r.status == "closed_win") / len(in_bucket) * 100, 1
+            )
+        buckets.append(entry)
+
+    return {
+        "total_eligible": len(rows),
+        "buckets": buckets,
+        "note": (
+            "Tests whether maxed momentum at entry predicts WORSE forward "
+            "movement (late/exhausted entries) or better (clean "
+            "confirmation). Not a conclusion until each bucket clears "
+            "min_sample — see the per-bucket 'note' field."
+        ),
+    }
+
+
+def evidence_coverage(min_sample: int = 5) -> dict:
+    """Of the evidence sources that can genuinely be unavailable for a
+    given symbol (ML prediction needs a trained model + enough of that
+    symbol's own history to standardize against; historical similarity
+    needs >= 20 stored analogues; sentiment needs a live Fear & Greed
+    fetch), how often did each actually participate, and does coverage
+    correlate with outcome? Trend/momentum/volume/structure/funding/regime
+    are NOT included here — they're always computed once features are
+    fetched, so "available" isn't a meaningful distinction for them the
+    way it is for ML/history/sentiment."""
+    session = SessionLocal()
+    try:
+        rows = (
+            session.execute(select(TradeOutcome).where(TradeOutcome.status.in_(["closed_win", "closed_loss"])))
+            .scalars()
+            .all()
+        )
+    finally:
+        session.close()
+
+    if len(rows) < min_sample:
+        return {
+            "sample_size": len(rows),
+            "note": f"Need >= {min_sample} resolved trades for this to mean anything; have {len(rows)}.",
+        }
+
+    def coverage(r: TradeOutcome) -> int:
+        return sum([r.ml_probability is not None, r.historic_probability is not None, r.fear_greed is not None])
+
+    by_coverage: dict[int, list[bool]] = defaultdict(list)
+    for r in rows:
+        by_coverage[coverage(r)].append(r.status == "closed_win")
+
+    levels = []
+    for n in range(4):  # 0, 1, 2, or all 3 of ML/history/sentiment available
+        vals = by_coverage.get(n, [])
+        entry = {"sources_available": n, "of_possible": 3, "sample_size": len(vals)}
+        if len(vals) < min_sample:
+            entry["note"] = f"Need >= {min_sample}; have {len(vals)}."
+        else:
+            entry["win_rate_pct"] = round(sum(vals) / len(vals) * 100, 1)
+        levels.append(entry)
+
+    ml_available = sum(1 for r in rows if r.ml_probability is not None)
+    history_available = sum(1 for r in rows if r.historic_probability is not None)
+    sentiment_available = sum(1 for r in rows if r.fear_greed is not None)
+
+    return {
+        "sample_size": len(rows),
+        "source_availability_pct": {
+            "ml": round(ml_available / len(rows) * 100, 1),
+            "history": round(history_available / len(rows) * 100, 1),
+            "sentiment": round(sentiment_available / len(rows) * 100, 1),
+        },
+        "win_rate_by_coverage_level": levels,
+    }
+
+
 def open_trade_count() -> dict:
     """Live count for the performance dashboard's "Open Trades" tile —
     reads current TradeOutcome status, not a windowed query."""

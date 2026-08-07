@@ -49,6 +49,29 @@ _COMPONENT_KEYWORDS = {
 }
 
 
+def _capture_entry_indicators(features: dict) -> dict | None:
+    """RSI/stochRSI/ADX and distance to EMA20/EMA50 on the 4h timeframe, at
+    the moment the plan was issued — see TradeOutcome.entry_indicators for
+    what's deliberately NOT captured (BOS/FVG distance) and why."""
+    ind = features.get("indicators_4h")
+    if not ind:
+        return None
+    last_close = ind.get("last_close")
+    ema20 = ind.get("ema20")
+    ema50 = ind.get("ema50")
+    return {
+        "rsi14": ind.get("rsi14"),
+        "stoch_rsi": ind.get("stoch_rsi"),
+        "adx14": ind.get("adx14"),
+        "distance_to_ema20_pct": (
+            round((last_close - ema20) / ema20 * 100, 3) if last_close and ema20 else None
+        ),
+        "distance_to_ema50_pct": (
+            round((last_close - ema50) / ema50 * 100, 3) if last_close and ema50 else None
+        ),
+    }
+
+
 def open_trade_outcome(
     symbol: str,
     plan,
@@ -140,6 +163,7 @@ def open_trade_outcome(
             score_formula_version=SCORE_FORMULA_VERSION,
             prompt_version=PROMPT_VERSION,
             ml_model_version=(ml_prediction or {}).get("model_version"),
+            entry_indicators=_capture_entry_indicators(features),
         )
         session.add(row)
         session.commit()
