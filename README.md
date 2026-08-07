@@ -249,6 +249,21 @@ computed score, not parsed from what Claude claims it is.
   a minimum sample size and still explicitly not a significance test.
 - **Storage**: SQLAlchemy, SQLite by default (zero extra infra), swap to
   Postgres by setting `DATABASE_URL` — no code changes needed.
+- **Exchange resilience** (`app/data_sources/binance.py:get_24h_tickers`,
+  `GET /api/health/exchanges`): the universe-ticker fetch — one call at the
+  top of every scan cycle that nothing else was isolated from — now
+  retries with backoff (1s/2s/4s) and, if all retries fail, falls back to
+  the last successful response rather than raising. A scan runs on
+  slightly stale universe data instead of not running at all; the scan
+  summary and server log both mark this as `degraded` rather than
+  masking it silently. Every per-symbol feature fetch was already
+  isolated (`return_exceptions=True`), so this closes the one real
+  single-point-of-failure that was left. `GET /api/health/exchanges`
+  pings Binance/Bybit/OKX directly and reports the scanner's own ticker
+  cache staleness, so an outage or IP ban is visible in one request
+  instead of only in server logs — built directly in response to hitting
+  exactly this class of problem live (see Deploying → Backend → Render
+  for the Binance-IP-ban story this came from).
 - **Continuous background engine** (`app/engine/background_scanner.py`):
   runs as a single in-process asyncio loop (no Celery/Redis needed for this
   phase — see below), started at app startup. Every `SCAN_INTERVAL_SECONDS`
@@ -484,14 +499,22 @@ long-lived process instead.
 Note: on Render's free plan the service sleeps after ~15 minutes idle, so the
 first request after a gap adds a ~30–50s cold start on top of normal latency.
 
-Note on region — **found live, not theoretical**: Binance's Futures API
-(`fapi.binance.com`) returns HTTP 451 ("Unavailable For Legal Reasons") for
-US-based IPs specifically (Binance.US is a separate entity that doesn't
-offer futures). Render's default regions (Oregon/Virginia) are both US and
-will hit this on every single scan cycle — `render.yaml` sets
-`region: frankfurt` for exactly this reason. If you ever see the scanner
-logs repeatedly show `[scanner] cycle failed: Client error '451'`, this is
-why — confirm the service's region isn't a US one.
+Note on region — **found live, not theoretical, twice**: Binance's Futures
+API (`fapi.binance.com`) returns HTTP 451 ("Unavailable For Legal Reasons")
+for US-based IPs specifically (Binance.US is a separate entity that
+doesn't offer futures). Render's default regions (Oregon/Virginia) are
+both US and hit this on every scan cycle. Moving to `region: frankfurt`
+fixed the 451 — but Frankfurt's *shared* outbound IP pool turned out to
+already be banned by Binance with an HTTP 418 ("I'm a teapot," Binance's
+specific code for an auto-banned IP) from OTHER Render tenants' traffic,
+not ours — confirmed by the ban surviving a full service restart.
+`render.yaml` now uses `region: singapore` as a different shared pool to
+try; check `GET /api/health/exchanges` (see below) after deploying to see
+current status without digging through logs. If Singapore is also banned,
+a shared free-tier IP may not be viable long-term — Render's static
+outbound IP add-on (paid) or a host with dedicated IPs (Fly.io, Railway)
+sidesteps the whole class of problem, since the IP isn't shared with
+whatever else is hammering Binance from that pool.
 
 Note on storage: the backend defaults to a local SQLite file, which lives on
 Render's ephemeral disk — a redeploy wipes backfilled history. Set

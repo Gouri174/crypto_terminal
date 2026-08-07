@@ -32,7 +32,7 @@ async def _resolve_symbols(question: str) -> list[str]:
     symbols = [f"{c}{_KNOWN_QUOTE}" for c in candidates]
 
     if not symbols:
-        tickers = await binance.get_24h_tickers()
+        tickers, _ticker_status = await binance.get_24h_tickers()
         usdt_pairs = [t for t in tickers if t["symbol"].endswith("USDT")]
         usdt_pairs.sort(key=lambda t: abs(float(t["priceChangePercent"])), reverse=True)
         symbols = [t["symbol"] for t in usdt_pairs[:3]]

@@ -122,7 +122,12 @@ def _pick_alternative(scored: list, current_symbol: str, current_total: float) -
 async def _run_scan() -> dict:
     regime = load_current_regime()  # from the previous cycle — see module docstring
 
-    tickers = await binance.get_24h_tickers()
+    tickers, ticker_status = await binance.get_24h_tickers()
+    if ticker_status["degraded"]:
+        print(
+            f"[scanner] running on {ticker_status['stale_seconds']:.0f}s-old cached "
+            f"tickers after live fetch failed: {ticker_status['error']}"
+        )
     usdt_pairs = [t for t in tickers if t["symbol"].endswith("USDT")]
     usdt_pairs.sort(key=lambda t: float(t["quoteVolume"]), reverse=True)
     universe = usdt_pairs[:UNIVERSE_SIZE]
@@ -193,7 +198,12 @@ async def _run_scan() -> dict:
     new_regime = market_regime.classify_regime(btc_features, scored)
     _save_regime(new_regime, now_ms)
 
-    return {"scanned": len(scored), "explained": explained, "at": now_ms}
+    return {
+        "scanned": len(scored),
+        "explained": explained,
+        "at": now_ms,
+        "degraded": ticker_status["degraded"],
+    }
 
 
 def _persist_scan(scored: list, now_ms: int) -> list:
