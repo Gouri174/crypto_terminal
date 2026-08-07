@@ -13,7 +13,7 @@ sys.path.insert(0, ".")
 
 from app.db import SessionLocal, init_db
 from app.engine import trade_outcomes, trade_reports
-from app.models.db_models import TradeOutcome
+from app.models.db_models import PredictionSnapshot, TradeOutcome
 
 init_db()
 
@@ -23,6 +23,9 @@ FAKE_SYMBOLS = ["ZZZTEST1USDT", "ZZZTEST2USDT", "ZZZTEST3USDT"]
 def cleanup():
     session = SessionLocal()
     try:
+        session.query(PredictionSnapshot).filter(PredictionSnapshot.symbol.in_(FAKE_SYMBOLS)).delete(
+            synchronize_session=False
+        )
         session.query(TradeOutcome).filter(TradeOutcome.symbol.in_(FAKE_SYMBOLS)).delete(
             synchronize_session=False
         )
@@ -205,6 +208,120 @@ def session_count(symbol):
         session.close()
 
 
+def test_confidence_grade_persisted():
+    symbol = FAKE_SYMBOLS[1] + "C"
+    FAKE_SYMBOLS.append(symbol)
+    plan = make_plan(symbol, entry_low=50.0, entry_high=51.0, stop_loss=48.0, tp1=54.0, tp2=None)
+    trade_outcomes.open_trade_outcome(symbol, plan, BREAKDOWN, FEATURES, HISTORY_STATS,
+                                       ML_PREDICTION, REGIME, now_ms=5_000_000,
+                                       confidence=82, grade="A")
+    row = get_row(symbol)
+    assert row.confidence == 82, row.confidence
+    assert row.grade == "A", row.grade
+
+    # resolve it to a win so calibration reporting (which only looks at
+    # closed_win/closed_loss) has an actual confidence=82/grade=A sample
+    trade_outcomes.update_open_trades({symbol: 50.5}, now_ms=5_060_000)  # opens
+    trade_outcomes.update_open_trades({symbol: 54.5}, now_ms=5_120_000)  # hits tp1 (only target) -> closes win
+    row = get_row(symbol)
+    assert row.status == "closed_win", row.status
+    print("[PASS] confidence/grade persisted on TradeOutcome, resolved for calibration testing")
+
+
+def test_prediction_snapshots():
+    """Append-only: every update_open_trades() call adds exactly one new
+    PredictionSnapshot per open/pending row it touches, never mutates a
+    prior one, and the numbers (pnl%, distances) are arithmetically
+    correct — no LLM involved anywhere in this path."""
+    symbol = FAKE_SYMBOLS[2] + "D"
+    FAKE_SYMBOLS.append(symbol)
+    plan = make_plan(symbol, entry_low=100.0, entry_high=101.0, stop_loss=97.0, tp1=105.0, tp2=110.0)
+    trade_outcomes.open_trade_outcome(symbol, plan, BREAKDOWN, FEATURES, HISTORY_STATS,
+                                       ML_PREDICTION, REGIME, now_ms=6_000_000,
+                                       confidence=70, grade="B+")
+    row_id = get_row(symbol).id
+
+    def snapshots():
+        session = SessionLocal()
+        try:
+            return (
+                session.query(PredictionSnapshot)
+                .filter(PredictionSnapshot.trade_outcome_id == row_id)
+                .order_by(PredictionSnapshot.id)
+                .all()
+            )
+        finally:
+            session.close()
+
+    # Cycle 1: still pending (price outside entry zone)
+    trade_outcomes.update_open_trades({symbol: 95.0}, now_ms=6_060_000, regime_label="risk_on")
+    snaps = snapshots()
+    assert len(snaps) == 1, len(snaps)
+    assert snaps[0].status == "pending"
+    assert snaps[0].current_pnl_pct == 0.0
+    assert snaps[0].market_regime == "risk_on"
+    assert snaps[0].confidence == 70 and snaps[0].grade == "B+"
+    first_snapshot_id = snaps[0].id
+
+    # Cycle 2: enters the zone -> open, pnl% should reflect the live price vs entry midpoint (100.5)
+    trade_outcomes.update_open_trades({symbol: 100.5}, now_ms=6_120_000, regime_label="risk_on")
+    snaps = snapshots()
+    assert len(snaps) == 2, len(snaps)
+    assert snaps[0].id == first_snapshot_id, "earlier snapshot must never be mutated or replaced"
+    assert snaps[1].status == "open"
+    assert snaps[1].current_pnl_pct == 0.0  # price == entry at the instant it opens
+    dist_tp1 = round((105.0 - 100.5) / 100.5 * 100, 3)
+    assert snaps[1].distance_to_tp1_pct == dist_tp1, (snaps[1].distance_to_tp1_pct, dist_tp1)
+
+    # Cycle 3: price runs up 2% -> pnl% should be positive and match, distance to TP1 shrinks
+    trade_outcomes.update_open_trades({symbol: 102.5}, now_ms=6_180_000, regime_label="risk_off")
+    snaps = snapshots()
+    assert len(snaps) == 3, len(snaps)
+    expected_pnl = round((102.5 - 100.5) / 100.5 * 100, 3)
+    assert snaps[2].current_pnl_pct == expected_pnl, (snaps[2].current_pnl_pct, expected_pnl)
+    assert snaps[2].market_regime == "risk_off"
+    assert snaps[2].distance_to_tp1_pct < dist_tp1, "distance to TP1 should shrink as price approaches it"
+
+    # Cycle 4: TP2 hit -> closes; snapshot reflects the resulting closed_win status
+    trade_outcomes.update_open_trades({symbol: 110.5}, now_ms=6_240_000, regime_label="risk_off")
+    snaps = snapshots()
+    assert len(snaps) == 4, len(snaps)
+    assert snaps[3].status == "closed_win", snaps[3].status
+    assert "closed" in snaps[3].reason.lower() or "reached" in snaps[3].reason.lower(), snaps[3].reason
+
+    print(f"[PASS] prediction snapshots: {len(snaps)} append-only rows, "
+          f"pnl/distance math correct, earlier rows never mutated")
+
+
+def test_calibration_and_signals_summary():
+    # confidence_calibration/grade_calibration read ALL resolved trades in
+    # the DB (not windowed), so assert on structure/gating rather than
+    # exact counts, which would be brittle against whatever real data
+    # already exists from prior sessions.
+    conf_cal = trade_reports.confidence_calibration(min_sample=1)
+    assert "buckets" in conf_cal and len(conf_cal["buckets"]) == 6, conf_cal
+    # our test trades used confidence 82 (A) and 70 (B+) -> should land in
+    # the 80-90 and 70-80 buckets respectively with real win-rate math
+    bucket_80 = next(b for b in conf_cal["buckets"] if b["range"] == "80-90")
+    assert bucket_80["sample_size"] >= 1, bucket_80
+    print(f"[PASS] confidence_calibration: {conf_cal}")
+
+    grade_cal = trade_reports.grade_calibration(min_sample=1)
+    assert "grades" in grade_cal and len(grade_cal["grades"]) == 6, grade_cal
+    grade_a = next(g for g in grade_cal["grades"] if g["grade"] == "A")
+    assert grade_a["sample_size"] >= 1, grade_a
+    print(f"[PASS] grade_calibration: {grade_cal}")
+
+    signals = trade_reports.signals_issued_summary(0, 10_000_000, "test signals window")
+    assert signals["signals"] >= 1, signals
+    assert signals["completed"] + signals["still_open"] == signals["signals"], signals
+    print(f"[PASS] signals_issued_summary: {signals}")
+
+    open_count = trade_reports.open_trade_count()
+    assert set(open_count.keys()) == {"pending", "open", "total_open"}
+    print(f"[PASS] open_trade_count: {open_count}")
+
+
 def test_reports():
     digest = trade_reports.performance_digest(0, 10_000_000, "test window")
     assert digest["signals_resolved"] >= 3, digest
@@ -227,6 +344,9 @@ if __name__ == "__main__":
         test_stop_loss_after_tp1()
         test_short_direction()
         test_invalidation_on_new_plan()
+        test_confidence_grade_persisted()
+        test_prediction_snapshots()
+        test_calibration_and_signals_summary()
         test_reports()
         print("\nALL TESTS PASSED")
     finally:

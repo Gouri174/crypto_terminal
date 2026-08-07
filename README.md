@@ -382,6 +382,56 @@ computed score, not parsed from what Claude claims it is.
     surfaced as a request-facing error, it just meant `MarketRegimeState`
     had been stale for a while. Fixed; regime now updates every cycle again
     (verified live — confirmed a fresh row write after the fix).
+- **Prediction validation system** — an evaluation layer, not another
+  prediction engine. Extends the closed-loop tracking above; deliberately
+  reuses `TradeOutcome`, `update_open_trades()`'s existing cycle, and
+  `trade_reports.py` rather than building a parallel system.
+  - **`confidence`/`grade` now stored on `TradeOutcome`** — a real gap:
+    these were computed per-plan but discarded after building the
+    `TradePlan` response, so no calibration analysis was possible. Now
+    threaded from `analyze_batch()`'s output through to `open_trade_outcome()`.
+  - **`PredictionSnapshot`** (`app/models/db_models.py`, new table): one
+    row per open/pending `TradeOutcome` per scan cycle — timestamp, price,
+    unrealized pnl%, distance to TP1/TP2/stop, confidence, grade, regime,
+    status, a deterministic plain-English reason. Strictly append-only
+    (only ever `INSERT`, never `UPDATE`) — a real time series of how a
+    live prediction evolved, not another mutable "current state" row.
+    Written by `record_snapshot()`, called from the SAME
+    `update_open_trades()` cycle that already checks entry/TP/stop — no
+    second timer, no extra API calls, zero Claude involvement anywhere in
+    this path. **Verified live**: a real open CYSUSDT position recorded a
+    real snapshot (0.48% pnl, 7.1% to TP1, stop 10.5% below price,
+    regime `risk_on`) during an actual scan cycle.
+  - **Calibration** (`GET /api/outcomes/calibration/{confidence,grade}`):
+    buckets resolved trades by their stored confidence/grade and reports
+    ACTUAL win rate per bucket — "does a 90-confidence trade really win
+    more than a 60-confidence one?" Gated behind a minimum sample per
+    bucket, and only ever includes trades that have a stored
+    confidence/grade — older rows honestly excluded, not backfilled with
+    a guess. **Currently 0 eligible trades** in production, since the
+    confidence/grade field only started being recorded this session — this
+    will fill in as new trades resolve, not something to fake in the
+    meantime.
+  - **`GET /api/digest/signals/{daily,weekly}`**: a different slice from
+    the existing digests — scores signals by when they were ISSUED, not
+    when they resolved, and explicitly reports still-open ones alongside
+    completed ones ("today's picks, however far they've gotten"), matching
+    the "Today's Signals / Completed / Still Open" report shape. The
+    existing `/digest/daily` etc. stay as-is (scored by resolution time) —
+    both are real, different questions, not a redundant duplicate.
+  - **`GET /api/digest/90day`, `GET /api/outcomes/open-count`**: straightforward
+    extensions of the existing digest/count pattern.
+  - **`GET /api/outcomes/{id}/snapshots`**: the full append-only history for
+    one trade — the raw material for a future frontend "prediction
+    progress" view.
+  - **Deliberately deferred, not silently dropped**: a periodic
+    Claude-generated "prediction update" (re-explaining an open trade only
+    on real state changes — invalidation, TP/stop hit, material confidence
+    shift) has real cost/complexity and needed its own pass, not folding
+    into this one; the frontend Live Prediction Page (progress bars per
+    open trade) is pure UI work on top of what's now built, not started
+    yet; chart annotation decluttering (fading older BOS/CHoCH/FVG
+    markers) touches chart-generation code untouched by this pass.
 
 ## Roadmap — what's NOT implemented yet, and why
 

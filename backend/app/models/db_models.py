@@ -132,6 +132,15 @@ class TradeOutcome(Base):
     direction: Mapped[str] = mapped_column(String(10))  # "long" | "short"
     timeframe: Mapped[str] = mapped_column(String(20))  # plan.time_horizon
 
+    # Confidence/grade as actually shown to the user for this plan — see
+    # app/engine/confidence.py and app/engine/decision.py:trade_grade.
+    # Distinct from `score` below (the ranking score): confidence reflects
+    # signal AGREEMENT, score is the raw weighted total. Needed for
+    # calibration (does a 90-confidence trade actually win more than a
+    # 60-confidence one?) — impossible to answer without storing this.
+    confidence: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    grade: Mapped[str | None] = mapped_column(String(10), nullable=True)
+
     # The plan as issued — never mutated after creation.
     entry_low: Mapped[float] = mapped_column(Float)
     entry_high: Mapped[float] = mapped_column(Float)
@@ -211,6 +220,49 @@ class TradeOutcome(Base):
     score_formula_version: Mapped[str | None] = mapped_column(String(20), nullable=True)
     prompt_version: Mapped[str | None] = mapped_column(String(20), nullable=True)
     ml_model_version: Mapped[str | None] = mapped_column(String(20), nullable=True)
+
+
+class PredictionSnapshot(Base):
+    """One deterministic validation check of an OPEN TradeOutcome, recorded
+    every scan cycle. Purely additive — never updated or overwritten, only
+    ever INSERTed — so it's a real time series of how a live prediction
+    evolved, not a single mutable "current state" like TradeOutcome itself.
+
+    Written by app/engine/trade_outcomes.py:record_snapshot(), called from
+    the same update_open_trades() cycle that already checks entry/TP/stop
+    against real price — no separate timer, no extra API calls, and NO
+    Claude involvement: every field here is arithmetic on data the scanner
+    already has this cycle.
+    """
+
+    __tablename__ = "prediction_snapshots"
+    __table_args__ = (
+        Index("ix_snapshot_outcome_id", "trade_outcome_id"),
+        Index("ix_snapshot_timestamp", "timestamp"),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    trade_outcome_id: Mapped[int] = mapped_column(Integer)  # FK to TradeOutcome.id, no ORM relationship needed
+    timestamp: Mapped[int] = mapped_column(Integer)  # epoch ms
+    symbol: Mapped[str] = mapped_column(String(20))
+
+    current_price: Mapped[float] = mapped_column(Float)
+    current_pnl_pct: Mapped[float] = mapped_column(Float)  # unrealized, sign-adjusted for direction
+    distance_to_tp1_pct: Mapped[float | None] = mapped_column(Float, nullable=True)
+    distance_to_tp2_pct: Mapped[float | None] = mapped_column(Float, nullable=True)
+    distance_to_stop_pct: Mapped[float] = mapped_column(Float)
+
+    # Carried over from the TradeOutcome row as of THIS check — confidence/
+    # grade don't change after a plan is issued (no re-explanation of open
+    # trades yet, see README), but stored per-snapshot anyway so this table
+    # is self-contained and doesn't require a join to reconstruct history
+    # once that changes.
+    confidence: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    grade: Mapped[str | None] = mapped_column(String(10), nullable=True)
+    market_regime: Mapped[str | None] = mapped_column(String(20), nullable=True)
+
+    status: Mapped[str] = mapped_column(String(20))  # TradeOutcome.status at check time
+    reason: Mapped[str] = mapped_column(String(200))  # plain-English, deterministic — never LLM-authored
 
 
 class MarketRegimeState(Base):

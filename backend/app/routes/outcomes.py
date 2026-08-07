@@ -4,8 +4,16 @@ from fastapi import APIRouter, Query
 from sqlalchemy import select
 
 from app.db import SessionLocal
-from app.engine.trade_reports import feature_importance, monthly_breakdown, performance_digest
-from app.models.db_models import TradeOutcome
+from app.engine.trade_reports import (
+    confidence_calibration,
+    feature_importance,
+    grade_calibration,
+    monthly_breakdown,
+    open_trade_count,
+    performance_digest,
+    signals_issued_summary,
+)
+from app.models.db_models import PredictionSnapshot, TradeOutcome
 
 router = APIRouter()
 
@@ -38,6 +46,8 @@ def _serialize(row: TradeOutcome) -> dict:
         "holding_minutes": row.holding_minutes,
         "status": row.status,
         "score": row.score,
+        "confidence": row.confidence,
+        "grade": row.grade,
         "ml_probability": row.ml_probability,
         "historic_probability": row.historic_probability,
         "market_regime": row.market_regime,
@@ -107,3 +117,83 @@ async def monthly_report():
     digest = performance_digest(start, now_ms, "Last 30 days")
     digest["breakdown"] = monthly_breakdown(start, now_ms)
     return digest
+
+
+@router.get("/digest/90day")
+async def ninety_day_report():
+    now_ms = int(time.time() * 1000)
+    start = now_ms - 90 * _DAY_MS
+    digest = performance_digest(start, now_ms, "Last 90 days")
+    digest["breakdown"] = monthly_breakdown(start, now_ms)
+    return digest
+
+
+@router.get("/digest/signals/daily")
+async def daily_signals():
+    """Different from /digest/daily: scores signals ISSUED today (however
+    they've resolved so far, including still-open ones), not signals that
+    happened to RESOLVE today regardless of when they were picked. This is
+    the "today's picks" report."""
+    now_ms = int(time.time() * 1000)
+    return signals_issued_summary(now_ms - _DAY_MS, now_ms, "Today's signals")
+
+
+@router.get("/digest/signals/weekly")
+async def weekly_signals():
+    now_ms = int(time.time() * 1000)
+    return signals_issued_summary(now_ms - 7 * _DAY_MS, now_ms, "This week's signals")
+
+
+@router.get("/outcomes/open-count")
+async def open_count():
+    return open_trade_count()
+
+
+@router.get("/outcomes/calibration/confidence")
+async def confidence_calibration_route(min_sample: int = Query(default=5)):
+    """Does a 90-confidence trade actually win more than a 60-confidence
+    one? See app/engine/trade_reports.py:confidence_calibration — real
+    trades only, honestly excludes rows predating the confidence field."""
+    return confidence_calibration(min_sample=min_sample)
+
+
+@router.get("/outcomes/calibration/grade")
+async def grade_calibration_route(min_sample: int = Query(default=5)):
+    return grade_calibration(min_sample=min_sample)
+
+
+@router.get("/outcomes/{trade_outcome_id}/snapshots")
+async def outcome_snapshots(trade_outcome_id: int):
+    """The append-only validation history for one TradeOutcome — every
+    scan cycle's deterministic check (price, pnl%, distance to targets)
+    since the plan was issued. See app/engine/trade_outcomes.py:record_snapshot."""
+    session = SessionLocal()
+    try:
+        rows = (
+            session.execute(
+                select(PredictionSnapshot)
+                .where(PredictionSnapshot.trade_outcome_id == trade_outcome_id)
+                .order_by(PredictionSnapshot.timestamp)
+            )
+            .scalars()
+            .all()
+        )
+    finally:
+        session.close()
+    return [
+        {
+            "id": r.id,
+            "timestamp": r.timestamp,
+            "current_price": r.current_price,
+            "current_pnl_pct": r.current_pnl_pct,
+            "distance_to_tp1_pct": r.distance_to_tp1_pct,
+            "distance_to_tp2_pct": r.distance_to_tp2_pct,
+            "distance_to_stop_pct": r.distance_to_stop_pct,
+            "confidence": r.confidence,
+            "grade": r.grade,
+            "market_regime": r.market_regime,
+            "status": r.status,
+            "reason": r.reason,
+        }
+        for r in rows
+    ]

@@ -264,3 +264,166 @@ def feature_importance(min_sample: int = 20, limit: int | None = None) -> dict:
 # Previous name — kept as an alias so nothing that already imports
 # score_correlations breaks.
 score_correlations = feature_importance
+
+
+_CONFIDENCE_BUCKETS = [(90, 101), (80, 90), (70, 80), (60, 70), (50, 60), (0, 50)]
+_GRADE_ORDER = ["A+", "A", "B+", "B", "C", "Avoid"]
+
+
+def confidence_calibration(min_sample: int = 5) -> dict:
+    """Buckets resolved trades by the confidence stored AT ISSUE TIME and
+    compares against actual win rate — "if 90-confidence trades only won
+    60% of the time, the confidence scale needs recalibration," not a
+    number to trust just because it looks precise. Only trades with a
+    stored confidence are included — TradeOutcome rows created before this
+    field existed are honestly excluded, not backfilled with a guess.
+    Per-bucket sample-size gate for the same reason as feature_importance:
+    a single lucky/unlucky trade shouldn't produce a misleading 100%/0%
+    bucket."""
+    session = SessionLocal()
+    try:
+        rows = (
+            session.execute(
+                select(TradeOutcome).where(
+                    TradeOutcome.status.in_(["closed_win", "closed_loss"]),
+                    TradeOutcome.confidence.is_not(None),
+                )
+            )
+            .scalars()
+            .all()
+        )
+    finally:
+        session.close()
+
+    buckets = []
+    for lo, hi in _CONFIDENCE_BUCKETS:
+        in_bucket = [r for r in rows if lo <= r.confidence < hi]
+        entry = {"range": f"{lo}-{min(hi, 100)}", "sample_size": len(in_bucket)}
+        if len(in_bucket) < min_sample:
+            entry["note"] = f"Need >= {min_sample} resolved trades in this range; have {len(in_bucket)}."
+        else:
+            wins = sum(1 for r in in_bucket if r.status == "closed_win")
+            entry["actual_win_rate_pct"] = round(wins / len(in_bucket) * 100, 1)
+        buckets.append(entry)
+
+    return {"total_eligible": len(rows), "buckets": buckets}
+
+
+def grade_calibration(min_sample: int = 5) -> dict:
+    """Same idea as confidence_calibration, bucketed by letter grade
+    instead — "does A+ actually outperform B?" Only trades with a stored
+    grade are included."""
+    session = SessionLocal()
+    try:
+        rows = (
+            session.execute(
+                select(TradeOutcome).where(
+                    TradeOutcome.status.in_(["closed_win", "closed_loss"]),
+                    TradeOutcome.grade.is_not(None),
+                )
+            )
+            .scalars()
+            .all()
+        )
+    finally:
+        session.close()
+
+    by_grade: dict[str, list[bool]] = defaultdict(list)
+    for r in rows:
+        by_grade[r.grade].append(r.status == "closed_win")
+
+    grades = []
+    for grade in _GRADE_ORDER:
+        vals = by_grade.get(grade, [])
+        entry = {"grade": grade, "sample_size": len(vals)}
+        if len(vals) < min_sample:
+            entry["note"] = f"Need >= {min_sample} resolved trades; have {len(vals)}."
+        else:
+            entry["actual_win_rate_pct"] = round(sum(vals) / len(vals) * 100, 1)
+        grades.append(entry)
+
+    return {"total_eligible": len(rows), "grades": grades}
+
+
+def signals_issued_summary(start_ms: int, end_ms: int, label: str) -> dict:
+    """Different slice from performance_digest: scores signals by when they
+    were ISSUED (created_at), not when they resolved — answers "how are
+    today's picks doing so far," including ones still open, rather than
+    "what resolved today regardless of when it was picked." This is the
+    shape of a daily/weekly "prediction report": signals, completed, still
+    open, TP/stop counts, and — only once enough of THIS batch has actually
+    resolved — return/win-rate/profit-factor and notable trades."""
+    session = SessionLocal()
+    try:
+        rows = (
+            session.execute(
+                select(TradeOutcome).where(
+                    TradeOutcome.created_at >= start_ms,
+                    TradeOutcome.created_at < end_ms,
+                    TradeOutcome.direction.in_(["long", "short"]),
+                )
+            )
+            .scalars()
+            .all()
+        )
+    finally:
+        session.close()
+
+    still_open = [r for r in rows if r.status in ("pending", "open")]
+    traded_completed = [r for r in rows if r.status in ("closed_win", "closed_loss")]
+
+    result = {
+        "label": label,
+        "signals": len(rows),
+        "completed": len(rows) - len(still_open),
+        "still_open": len(still_open),
+        "tp1_hit": sum(1 for r in rows if r.tp1_hit),
+        "tp2_hit": sum(1 for r in rows if r.tp2_hit),
+        "tp3_hit": sum(1 for r in rows if r.tp3_hit),
+        "stopped": sum(1 for r in rows if r.status == "closed_loss"),
+    }
+
+    if not traded_completed:
+        result["note"] = "None of this window's signals have resolved to a win/loss yet."
+        return result
+
+    returns = [r.realized_return_pct for r in traded_completed]
+    wins = [r for r in traded_completed if r.status == "closed_win"]
+    gains = [r.realized_return_pct for r in wins]
+    loss_amounts = [abs(r.realized_return_pct) for r in traded_completed if r.status == "closed_loss"]
+    with_confidence = [r for r in rows if r.confidence is not None]
+    worst = min(traded_completed, key=lambda r: r.realized_return_pct)
+    biggest_surprise = max(
+        traded_completed,
+        key=lambda r: abs((1.0 if r.status == "closed_win" else 0.0) - _predicted_probability(r)),
+    )
+
+    result["average_return_pct"] = round(statistics.mean(returns), 2)
+    result["win_rate_pct"] = round(len(wins) / len(traded_completed) * 100, 1)
+    result["profit_factor"] = round(sum(gains) / sum(loss_amounts), 2) if loss_amounts else None
+    result["worst_trade"] = {"symbol": worst.symbol, "return_pct": worst.realized_return_pct}
+    result["biggest_surprise"] = {"symbol": biggest_surprise.symbol, "outcome": biggest_surprise.status}
+    if with_confidence:
+        highest = max(with_confidence, key=lambda r: r.confidence)
+        result["highest_confidence_trade"] = {"symbol": highest.symbol, "confidence": highest.confidence}
+
+    return result
+
+
+def open_trade_count() -> dict:
+    """Live count for the performance dashboard's "Open Trades" tile —
+    reads current TradeOutcome status, not a windowed query."""
+    session = SessionLocal()
+    try:
+        statuses = (
+            session.execute(select(TradeOutcome.status).where(TradeOutcome.status.in_(["pending", "open"])))
+            .scalars()
+            .all()
+        )
+    finally:
+        session.close()
+    return {
+        "pending": statuses.count("pending"),
+        "open": statuses.count("open"),
+        "total_open": len(statuses),
+    }

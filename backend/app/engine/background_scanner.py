@@ -164,7 +164,7 @@ async def _run_scan() -> dict:
     # Advance every open TradeOutcome against this cycle's real prices
     # before issuing any new plans — see app/engine/trade_outcomes.py.
     prices = {ticker["symbol"]: float(ticker["lastPrice"]) for ticker in universe}
-    update_open_trades(prices, now_ms)
+    update_open_trades(prices, now_ms, regime_label=(regime or {}).get("label"))
 
     batch_items = [
         {
@@ -192,6 +192,7 @@ async def _run_scan() -> dict:
             open_trade_outcome(
                 symbol, plan, item["breakdown"], item["features"],
                 item["history_stats"], item["ml_prediction"], regime, now_ms,
+                confidence=plan.confidence, grade=plan.grade,
             )
             explained += 1
 

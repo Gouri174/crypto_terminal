@@ -21,7 +21,7 @@ from sqlalchemy import select
 from app.db import SessionLocal
 from app.engine.reasoning import PROMPT_VERSION
 from app.engine.scoring import SCORE_FORMULA_VERSION
-from app.models.db_models import TradeOutcome
+from app.models.db_models import PredictionSnapshot, TradeOutcome
 
 # A trade that never enters, or never resolves, within this window is
 # closed out rather than tracked forever. 14 days comfortably covers this
@@ -58,6 +58,8 @@ def open_trade_outcome(
     ml_prediction: dict | None,
     regime: dict | None,
     now_ms: int,
+    confidence: int | None = None,
+    grade: str | None = None,
 ) -> None:
     """No-op for no_trade recommendations or plans missing the numeric
     levels needed to track a position — there's nothing to follow."""
@@ -97,6 +99,8 @@ def open_trade_outcome(
             created_at=now_ms,
             symbol=symbol,
             direction=plan.recommendation,
+            confidence=confidence,
+            grade=grade,
             timeframe=plan.time_horizon,
             entry_low=plan.entry_low,
             entry_high=plan.entry_high,
@@ -143,12 +147,17 @@ def open_trade_outcome(
         session.close()
 
 
-def update_open_trades(prices: dict[str, float], now_ms: int) -> None:
+def update_open_trades(prices: dict[str, float], now_ms: int, regime_label: str | None = None) -> None:
     """prices: symbol -> last price, from data this scan cycle already
     fetched. A symbol that's temporarily outside the scanned universe just
     doesn't get a price update that cycle — its MFE/MAE tracking has a gap
     until it reappears, rather than costing an extra API call to chase it.
-    Documented tradeoff, not a silent bug."""
+    Documented tradeoff, not a silent bug.
+
+    Also records one PredictionSnapshot per open/pending row per cycle —
+    the "Prediction Monitor" this app's evaluation layer runs on. Uses the
+    SAME cycle and the SAME already-fetched prices as the entry/TP/stop
+    check below; no separate timer, no extra API calls, no Claude call."""
     session = SessionLocal()
     try:
         open_rows = (
@@ -163,9 +172,65 @@ def update_open_trades(prices: dict[str, float], now_ms: int) -> None:
             if price is None:
                 continue
             _update_one(row, price, now_ms)
+            record_snapshot(session, row, price, now_ms, regime_label)
         session.commit()
     finally:
         session.close()
+
+
+def record_snapshot(
+    session, row: TradeOutcome, price: float, now_ms: int, regime_label: str | None
+) -> None:
+    """Append-only: always INSERTs a new PredictionSnapshot, never updates
+    an existing one. Called after _update_one() so the snapshot reflects
+    this cycle's resulting status (e.g. closed_win if a target was just
+    hit), not the status from before this check."""
+    is_long = row.direction == "long"
+    sign = 1 if is_long else -1
+
+    pnl_pct = round((price - row.entry) / row.entry * 100 * sign, 3) if row.status == "open" else 0.0
+
+    def _distance(level: float | None) -> float | None:
+        # Positive = still ahead in the favorable direction; sign-adjusted
+        # so "distance" always means "how far until this level," not a
+        # raw price difference that flips meaning between long and short.
+        if level is None:
+            return None
+        return round((level - price) / price * 100 * sign, 3)
+
+    session.add(
+        PredictionSnapshot(
+            trade_outcome_id=row.id,
+            timestamp=now_ms,
+            symbol=row.symbol,
+            current_price=price,
+            current_pnl_pct=pnl_pct,
+            distance_to_tp1_pct=_distance(row.tp1),
+            distance_to_tp2_pct=_distance(row.tp2),
+            distance_to_stop_pct=round((row.stop_loss - price) / price * 100 * sign, 3),
+            confidence=row.confidence,
+            grade=row.grade,
+            market_regime=regime_label,
+            status=row.status,
+            reason=_snapshot_reason(row, price),
+        )
+    )
+
+
+def _snapshot_reason(row: TradeOutcome, price: float) -> str:
+    if row.status == "pending":
+        return f"Price {price:g} has not yet entered the {row.entry_low:g}-{row.entry_high:g} zone."
+    if row.status == "open":
+        return f"Price {price:g}; position open, no exit condition hit yet."
+    if row.status == "closed_win":
+        return "Target reached this cycle; trade closed."
+    if row.status == "closed_loss":
+        return "Stop hit this cycle; trade closed."
+    if row.status == "closed_stale":
+        return "Never entered within the max holding window; closed stale."
+    if row.status == "invalidated":
+        return "Superseded by a new plan before resolving."
+    return f"Status: {row.status}"
 
 
 def _update_one(row: TradeOutcome, price: float, now_ms: int) -> None:
