@@ -99,6 +99,31 @@ export interface LifecycleEvent {
   at: number;
   status: string;
   reason: string;
+  // Added later — events written before this field existed won't have it.
+  // See app/engine/lifecycle.py:plan_signature; identical signature means
+  // "same trade," a changed one marks a new trade cycle for this symbol.
+  signature?: string;
+}
+
+// One row from GET /api/outcomes?symbol=X — a real, resolved-or-open trade
+// record, distinct from the always-current LiveOpportunity/TradePlan.
+export interface TradeOutcomeSummary {
+  id: number;
+  created_at: number;
+  symbol: string;
+  direction: string;
+  entry_low: number;
+  entry_high: number;
+  entry: number;
+  stop_loss: number;
+  tp1: number | null;
+  tp2: number | null;
+  tp3: number | null;
+  status: string; // "pending" | "open" | "closed_win" | "closed_loss" | "closed_stale" | "invalidated"
+  confidence: number | null;
+  grade: string | null;
+  realized_return_pct: number | null;
+  exit_time: number | null;
 }
 
 export interface Opportunity {

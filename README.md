@@ -298,10 +298,42 @@ computed score, not parsed from what Claude claims it is.
   a plain-English reason into a per-symbol timeline shown on the detail
   page. Verified across real scan cycles: three symbols advanced
   WAIT → BUY_NOW as price entered their entry zones between cycles.
+  **Found and fixed a real staleness bug via live use**: `LiveOpportunity`
+  is one row per SYMBOL, not per trade, so `lifecycle_status` used to lag
+  a full `SCAN_INTERVAL_SECONDS` after a new plan replaced a just-closed
+  one — `_persist_scan()` runs before Claude is called, using the
+  PREVIOUS cycle's plan, so a fresh recommendation issued this cycle sat
+  next to last cycle's terminal `EXIT_STOPPED`/`EXIT_TARGET` badge until
+  the NEXT cycle finally noticed. On the coin detail page that read as
+  "this new pick already failed," which is wrong. Fixed by having
+  `_save_trade_plan()` recompute `lifecycle_status` against the fresh plan
+  immediately, in the same cycle Claude returns it, instead of waiting.
+  Each `lifecycle_history` entry now also carries the `plan_signature` it
+  was recorded under, so the frontend can group a symbol's timeline by
+  which actual trade produced each event, rather than one flat list that
+  blurs a closed trade's history into the new one's.
 - **Frontend**: Next.js dashboard with ranked opportunity cards, a live
   indicator, a market-regime banner, and per-symbol lifecycle badges; the
   detail page renders the score breakdown as bars (component/max, e.g.
   "14.19/25"), the historical-match stats, and the lifecycle timeline.
+  **Previous vs. current trade separation** (`frontend/app/coin/[symbol]/page.tsx`):
+  found via live use — when a trade closes and Claude issues a fresh plan
+  the same cycle, the page used to show one lifecycle badge and one flat
+  timeline, so a just-stopped-out trade's badge and history sat directly
+  above a brand-new, unrelated recommendation with nothing distinguishing
+  them. Fixed two ways: a "Previous {symbol} trade" card (sourced from
+  `GET /api/outcomes?symbol=X`, the real closed `TradeOutcome` row) now
+  renders separately, with its own win/loss/expired badge and exit price,
+  whenever its levels differ from the live plan below it; and the Live
+  Reasoning Timeline groups events by trade — split on the
+  `lifecycle_history` entry's `plan_signature` where present, and on the
+  existing `"New setup replaces the completed trade"` reason text for
+  older entries recorded before that field existed, so grouping works
+  retroactively on real historical data, not just new events. **Verified
+  live** against a real ACEUSDT trade: the previous stopped-out position
+  (entry 0.113–0.116, -9.7%) now shows as a distinct closed card, and the
+  timeline correctly splits into a 3-event "Current trade" group and a
+  5-event "Past trade" group instead of one undifferentiated list.
 - **AI-annotated chart** (`app/engine/chart_data.py`, `GET /api/chart/{symbol}`,
   `frontend/components/ChartPanel.tsx`): a real `lightweight-charts`
   candlestick chart (TradingView's own open-source library — no paid

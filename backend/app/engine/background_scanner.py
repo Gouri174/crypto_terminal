@@ -205,7 +205,7 @@ async def _run_scan() -> dict:
             plans = {}
         for symbol, plan in plans.items():
             item = by_symbol_input[symbol]
-            _save_trade_plan(symbol, plan, item["breakdown"]["total"], now_ms)
+            _save_trade_plan(symbol, plan, item["breakdown"]["total"], now_ms, prices.get(symbol))
             open_trade_outcome(
                 symbol, plan, item["breakdown"], item["features"],
                 item["history_stats"], item["ml_prediction"], regime, now_ms,
@@ -300,7 +300,7 @@ def _persist_scan(scored: list, now_ms: int, regime_label: str | None) -> list:
             )
             if reason:
                 history = list(row.lifecycle_history or [])
-                history.append({"at": now_ms, "status": new_status, "reason": reason})
+                history.append({"at": now_ms, "status": new_status, "reason": reason, "signature": new_sig})
                 row.lifecycle_history = history[-50:]
             row.lifecycle_status = new_status
             row.lifecycle_plan_signature = new_sig
@@ -323,7 +323,17 @@ def _persist_scan(scored: list, now_ms: int, regime_label: str | None) -> list:
     return to_explain
 
 
-def _save_trade_plan(symbol: str, plan, score_total: float, now_ms: int) -> None:
+def _save_trade_plan(symbol: str, plan, score_total: float, now_ms: int, price: float | None) -> None:
+    """Saves the fresh plan AND recomputes lifecycle_status against it in
+    the SAME cycle. Found live: _persist_scan() runs BEFORE Claude is
+    called, using the PREVIOUS cycle's plan — so when a trade just closed
+    (EXIT_STOPPED/EXIT_TARGET) and Claude immediately issues a new one this
+    same cycle, lifecycle_status stayed stuck on the just-closed trade's
+    terminal state for a full SCAN_INTERVAL_SECONDS until the NEXT cycle's
+    _persist_scan() finally noticed the signature changed. On the coin
+    detail page that showed a "Stopped Out" badge sitting directly above a
+    brand-new, unrelated recommendation — reads as "this new pick already
+    failed," which is wrong. Recomputing here closes that gap immediately."""
     session = SessionLocal()
     try:
         row = session.get(LiveOpportunity, symbol)
@@ -332,6 +342,18 @@ def _save_trade_plan(symbol: str, plan, score_total: float, now_ms: int) -> None
         row.trade_plan = plan.model_dump()
         row.trade_plan_updated_at = now_ms
         row.last_llm_score = score_total
+
+        if price is not None:
+            new_status, reason, new_sig = lifecycle.advance(
+                row.lifecycle_status or "WAIT", row.lifecycle_plan_signature or "none", price, row.trade_plan
+            )
+            if reason:
+                history = list(row.lifecycle_history or [])
+                history.append({"at": now_ms, "status": new_status, "reason": reason, "signature": new_sig})
+                row.lifecycle_history = history[-50:]
+            row.lifecycle_status = new_status
+            row.lifecycle_plan_signature = new_sig
+
         session.commit()
     finally:
         session.close()

@@ -1,4 +1,4 @@
-import type { Opportunity } from "./types";
+import type { Opportunity, TradeOutcomeSummary } from "./types";
 import type { ChartData } from "./chart-types";
 
 const API_BASE_URL = process.env.NEXT_PUBLIC_API_BASE_URL || "http://localhost:8000";
@@ -41,6 +41,20 @@ export async function fetchAnalysis(symbol: string): Promise<Opportunity> {
     cache: "no-store",
   });
   if (!res.ok) throw new Error(`Failed to fetch analysis for ${symbol}: ${res.status}`);
+  return res.json();
+}
+
+/**
+ * A symbol's own TradeOutcome history, newest first — used to show the
+ * most recently CLOSED trade separately from the live trade_plan, so a
+ * stopped-out/target-hit past trade never reads as if it's the same one
+ * being currently recommended.
+ */
+export async function fetchOutcomeHistory(symbol: string, limit = 5): Promise<TradeOutcomeSummary[]> {
+  const res = await fetch(`${API_BASE_URL}/api/outcomes?symbol=${symbol}&limit=${limit}`, {
+    cache: "no-store",
+  });
+  if (!res.ok) throw new Error(`Failed to fetch trade history for ${symbol}: ${res.status}`);
   return res.json();
 }
 

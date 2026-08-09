@@ -2,8 +2,8 @@
 
 import { use, useEffect, useState } from "react";
 import Link from "next/link";
-import { fetchAnalysis } from "@/lib/api";
-import type { Opportunity, ScoreBreakdown } from "@/lib/types";
+import { fetchAnalysis, fetchOutcomeHistory } from "@/lib/api";
+import type { LifecycleEvent, Opportunity, ScoreBreakdown, TradeOutcomeSummary } from "@/lib/types";
 import { lifecycleColor, lifecycleLabel } from "@/lib/lifecycle";
 import RegimeBanner from "@/components/RegimeBanner";
 import ChartPanel from "@/components/ChartPanel";
@@ -15,12 +15,14 @@ export default function CoinDetailPage({
 }) {
   const { symbol } = use(params);
   const [data, setData] = useState<Opportunity | null>(null);
+  const [outcomes, setOutcomes] = useState<TradeOutcomeSummary[] | null>(null);
   const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
     fetchAnalysis(symbol)
       .then(setData)
       .catch((e) => setError(e.message));
+    fetchOutcomeHistory(symbol).then(setOutcomes).catch(() => setOutcomes([]));
   }, [symbol]);
 
   if (error) {
@@ -44,6 +46,19 @@ export default function CoinDetailPage({
 
   const { trade_plan: plan } = data;
 
+  // A trade only counts as genuinely "previous" (distinct from the live
+  // recommendation below) if its levels don't match the current plan —
+  // otherwise this is just the same open trade, and showing two cards for
+  // one trade would be more confusing, not less. See lifecycle.py:
+  // plan_signature — this is the same comparison the backend uses to
+  // decide whether a new plan replaced the old one.
+  const latestClosed = outcomes?.find((o) => o.status.startsWith("closed_")) ?? null;
+  const isDistinctPrevious =
+    latestClosed != null &&
+    plan.entry_low != null &&
+    (Math.abs(latestClosed.entry_low - plan.entry_low) > 1e-9 ||
+      Math.abs((latestClosed.stop_loss ?? 0) - (plan.stop_loss ?? 0)) > 1e-9);
+
   return (
     <main className="max-w-5xl mx-auto px-6 py-10">
       <Link href="/" className="text-sm text-gray-400 hover:underline">
@@ -58,7 +73,16 @@ export default function CoinDetailPage({
           <span className="text-xl">${data.last_price.toLocaleString()}</span>
         </div>
 
+        {isDistinctPrevious && latestClosed && (
+          <PreviousTradeCard outcome={latestClosed} symbol={data.symbol} />
+        )}
+
         <div className="mb-4 flex items-center gap-2">
+          {isDistinctPrevious && (
+            <span className="text-xs uppercase font-semibold px-2 py-1 rounded border border-bull text-bull">
+              🟢 Current trade
+            </span>
+          )}
           <span
             className={`text-xs uppercase font-semibold px-2 py-1 rounded border ${lifecycleColor(
               data.lifecycle_status
@@ -259,25 +283,42 @@ export default function CoinDetailPage({
 
         {data.lifecycle_history.length > 0 && (
           <Section title="Live Reasoning Timeline">
-            <ul className="space-y-2">
-              {[...data.lifecycle_history].reverse().map((ev, i) => (
-                <li key={i} className="text-sm border-l-2 border-border pl-3">
-                  <div className="flex items-center gap-2">
-                    <span className="text-gray-500 text-xs">
-                      {new Date(ev.at).toLocaleTimeString()}
-                    </span>
-                    <span
-                      className={`text-[10px] uppercase font-semibold px-1.5 py-0.5 rounded border ${lifecycleColor(
-                        ev.status
-                      )}`}
+            <div className="space-y-4">
+              {groupTimelineBySignature(data.lifecycle_history, currentPlanSignature(plan)).map(
+                (group, gi) => (
+                  <div key={gi} className="rounded border border-border p-3">
+                    <div
+                      className={`text-xs uppercase font-semibold mb-2 ${
+                        group.isCurrent ? "text-bull" : "text-gray-500"
+                      }`}
                     >
-                      {lifecycleLabel(ev.status)}
-                    </span>
+                      {group.isCurrent
+                        ? "🟢 Current trade"
+                        : `Past trade${group.entryRange ? " — entry " + group.entryRange : ""}`}
+                    </div>
+                    <ul className="space-y-2">
+                      {group.events.map((ev, i) => (
+                        <li key={i} className="text-sm border-l-2 border-border pl-3">
+                          <div className="flex items-center gap-2">
+                            <span className="text-gray-500 text-xs">
+                              {new Date(ev.at).toLocaleTimeString()}
+                            </span>
+                            <span
+                              className={`text-[10px] uppercase font-semibold px-1.5 py-0.5 rounded border ${lifecycleColor(
+                                ev.status
+                              )}`}
+                            >
+                              {lifecycleLabel(ev.status)}
+                            </span>
+                          </div>
+                          <p className="text-gray-300">{ev.reason}</p>
+                        </li>
+                      ))}
+                    </ul>
                   </div>
-                  <p className="text-gray-300">{ev.reason}</p>
-                </li>
-              ))}
-            </ul>
+                )
+              )}
+            </div>
           </Section>
         )}
 
@@ -287,6 +328,103 @@ export default function CoinDetailPage({
       </div>
     </main>
   );
+}
+
+function PreviousTradeCard({ outcome, symbol }: { outcome: TradeOutcomeSummary; symbol: string }) {
+  const isWin = outcome.status === "closed_win";
+  const isStale = outcome.status === "closed_stale";
+  const label = isStale ? "Expired — Never Entered" : isWin ? "Target Hit" : "Stopped Out";
+  const dot = isStale ? "⚪" : isWin ? "🟢" : "🔴";
+  const colorClass = isStale ? "border-gray-500 text-gray-400" : isWin ? "border-bull text-bull" : "border-bear text-bear";
+  const exitDescription = isStale
+    ? "never triggered"
+    : isWin
+      ? `target hit`
+      : `stop ${outcome.stop_loss}`;
+
+  return (
+    <div className={`mb-4 rounded border bg-black/20 p-3 text-sm ${colorClass}`}>
+      <div className="flex items-center justify-between flex-wrap gap-2">
+        <span className="text-xs uppercase font-semibold text-gray-500">Previous {symbol} trade</span>
+        <span className={`text-xs uppercase font-semibold px-2 py-0.5 rounded border ${colorClass}`}>
+          {dot} {label}
+        </span>
+      </div>
+      <div className="mt-1 text-gray-300">
+        Entry {fmtRange(outcome.entry_low, outcome.entry_high)} → {exitDescription}
+        {outcome.realized_return_pct != null && (
+          <span className={outcome.realized_return_pct >= 0 ? "text-bull" : "text-bear"}>
+            {" "}
+            ({outcome.realized_return_pct >= 0 ? "+" : ""}
+            {outcome.realized_return_pct}%)
+          </span>
+        )}
+      </div>
+      <p className="text-xs text-gray-500 mt-1">
+        This trade is closed — it is not the current recommendation shown below.
+      </p>
+    </div>
+  );
+}
+
+function currentPlanSignature(plan: import("@/lib/types").TradePlan): string {
+  // Mirrors app/engine/lifecycle.py:plan_signature exactly, so a
+  // lifecycle_history entry's stored signature can be compared against
+  // the live plan to tell "this is the current trade's own history" from
+  // "this is a past, closed trade's history."
+  return `${plan.recommendation}:${plan.entry_low}:${plan.entry_high}:${plan.stop_loss}`;
+}
+
+function parseSignatureRange(sig: string): string | null {
+  const parts = sig.split(":");
+  if (parts.length < 3 || parts[1] === "null" || parts[1] === "None") return null;
+  return `${parts[1]}–${parts[2]}`;
+}
+
+interface TimelineGroup {
+  signature: string;
+  events: LifecycleEvent[];
+  isCurrent: boolean;
+  entryRange: string | null;
+}
+
+function groupTimelineBySignature(history: LifecycleEvent[], currentSig: string): TimelineGroup[] {
+  // history is chronological (oldest first, as stored). Consecutive events
+  // sharing a signature belong to the same trade cycle; a signature change
+  // marks a new trade (see lifecycle.py:advance — a plan replacing a
+  // terminal one always changes the signature). Older entries recorded
+  // before this field existed have no signature at all — for those, fall
+  // back to the reason text lifecycle.py already writes at exactly this
+  // boundary ("New setup replaces the completed trade"), so grouping works
+  // retroactively on existing history too, not just events going forward.
+  const NEW_SETUP_REASON = "New setup replaces the completed trade";
+  const TERMINAL_STATUSES = new Set(["EXIT_TARGET", "EXIT_STOPPED"]);
+
+  const groups: TimelineGroup[] = [];
+  for (const ev of history) {
+    const sig = ev.signature ?? "unknown";
+    const last = groups[groups.length - 1];
+    const sameGroup = last && ev.reason !== NEW_SETUP_REASON && (ev.signature == null || last.signature === sig);
+    if (sameGroup && last) {
+      last.events.push(ev);
+      if (ev.signature != null) last.signature = sig;
+    } else {
+      groups.push({ signature: sig, events: [ev], isCurrent: false, entryRange: parseSignatureRange(sig) });
+    }
+  }
+
+  // The most recent group is "current" if its own signature matches the
+  // live plan, OR (for legacy entries with no signature) its last event
+  // isn't a terminal status — a closed trade's last event is always
+  // EXIT_TARGET/EXIT_STOPPED, so anything still WAIT/PREPARE/BUY_NOW/HOLD
+  // is genuinely ongoing.
+  const mostRecent = groups[groups.length - 1];
+  if (mostRecent) {
+    const lastEvent = mostRecent.events[mostRecent.events.length - 1];
+    mostRecent.isCurrent = mostRecent.signature === currentSig || !TERMINAL_STATUSES.has(lastEvent.status);
+  }
+
+  return groups.reverse(); // newest trade cycle first
 }
 
 function gradeColor(grade: string): string {
