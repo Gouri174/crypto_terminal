@@ -45,7 +45,8 @@ _CATEGORY_KEYWORDS = {
     "calibration": ["calibrat", "confidence actually", "does confidence", "grade actually", "trust the grade", "trust the confidence"],
     "feature_importance": ["feature importance", "which factor", "what matters", "what predicts", "correlat", "most important"],
     "momentum_patterns": ["momentum", "run-up", "runup", "time to tp", "reach tp", "false breakout", "entry timing", "evidence coverage"],
-    "long_vs_short": ["long vs short", "longs vs shorts", "long or short", "shorts perform", "longs perform", "direction"],
+    "entry_quality": ["entry quality", "late entry", "exhausted", "overextended", "over extended", "good entry", "entry timing quality"],
+    "long_vs_short": ["long vs short", "longs vs shorts", "long or short", "shorts perform", "longs perform", "direction", "short signals", "long signals"],
     "regime_performance": ["market regime", "which regime", "bull market", "bear market", "regime performance"],
     "retrain": ["retrain", "retraining", "should i train", "model version", "new model"],
 }
@@ -292,8 +293,12 @@ def gather_context(question: str) -> RouterResult:
         data["momentum_vs_runup"] = trade_reports.momentum_vs_runup()
         data["momentum_vs_time_to_tp1"] = trade_reports.momentum_vs_time_to_tp1()
         data["evidence_coverage"] = trade_reports.evidence_coverage()
+        data["momentum_score_buckets"] = trade_reports.momentum_score_bucket_performance()
+    if "entry_quality" in categories:
+        data["entry_quality_performance"] = trade_reports.entry_quality_performance()
     if "long_vs_short" in categories:
         data["direction_breakdown"] = trade_reports.direction_breakdown(start_ms, now_ms)
+        data["signal_direction_counts"] = trade_reports.signal_direction_counts(start_ms, now_ms)
     if "regime_performance" in categories:
         data["current_regime"] = load_current_regime()
         data["monthly_breakdown"] = data.get("monthly_breakdown") or trade_reports.monthly_breakdown(start_ms, now_ms)

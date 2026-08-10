@@ -6,14 +6,17 @@ from sqlalchemy import select
 from app.db import SessionLocal
 from app.engine.trade_reports import (
     confidence_calibration,
+    entry_quality_performance,
     evidence_coverage,
     feature_importance,
     grade_calibration,
+    momentum_score_bucket_performance,
     momentum_vs_runup,
     momentum_vs_time_to_tp1,
     monthly_breakdown,
     open_trade_count,
     performance_digest,
+    signal_direction_counts,
     signals_issued_summary,
 )
 from app.models.db_models import PredictionSnapshot, TradeOutcome
@@ -190,6 +193,32 @@ async def evidence_coverage_route(min_sample: int = Query(default=5)):
     participated in a trade's score, and whether coverage correlates with
     outcome. See app/engine/trade_reports.py:evidence_coverage."""
     return evidence_coverage(min_sample=min_sample)
+
+
+@router.get("/outcomes/entry-quality")
+async def entry_quality_performance_route(min_sample: int = Query(default=5)):
+    """Compares real resolved-trade outcomes across entry_quality buckets
+    (app/engine/entry_quality.py). A hypothesis under active data
+    collection, not a validated signal — see the report's own "note" field.
+    Only trades issued after entry_quality shipped are included."""
+    return entry_quality_performance(min_sample=min_sample)
+
+
+@router.get("/outcomes/momentum-buckets")
+async def momentum_score_bucket_route(min_sample: int = Query(default=5)):
+    """Win rate/return by momentum_score bucket (0-7 / 8-11 / 12-14 / 15) —
+    the exact buckets used to investigate the forensic report's momentum
+    finding. See app/engine/trade_reports.py:momentum_score_bucket_performance."""
+    return momentum_score_bucket_performance(min_sample=min_sample)
+
+
+@router.get("/outcomes/signal-directions")
+async def signal_direction_counts_route(days: int = Query(default=7, le=90)):
+    """How many long/short/no_trade decisions the engine made across the
+    FULL scanned universe (not just published trades) in the last N days —
+    see app/engine/trade_reports.py:signal_direction_counts."""
+    now_ms = int(time.time() * 1000)
+    return signal_direction_counts(now_ms - days * _DAY_MS, now_ms)
 
 
 @router.get("/outcomes/{trade_outcome_id}/snapshots")

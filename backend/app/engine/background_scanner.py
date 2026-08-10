@@ -32,6 +32,7 @@ from app.data_sources import binance
 from app.db import SessionLocal
 from app.engine import lifecycle, market_regime, ml_model
 from app.engine.decision import decide_direction
+from app.engine.entry_quality import classify_entry_quality
 from app.engine.feature_builder import build_features
 from app.engine.llm_gate import should_reexplain
 from app.engine.reasoning import analyze_batch
@@ -45,7 +46,12 @@ SIMILARITY_INTERVAL = "4h"
 
 
 def _rejection_reason(
-    direction: str, rank: int, in_top_candidates: bool, explained_this_cycle: bool, had_active_plan: bool
+    direction: str,
+    rank: int,
+    in_top_candidates: bool,
+    explained_this_cycle: bool,
+    had_active_plan: bool,
+    entry_quality: str | None = None,
 ) -> str | None:
     """Deterministic, template-built — never asks Claude to explain why a
     symbol wasn't published, since that would risk inventing a reason.
@@ -53,9 +59,13 @@ def _rejection_reason(
     if had_active_plan:
         return None
     if direction == "no_trade":
+        if entry_quality == "exhausted":
+            return "no_trade: entry_quality=exhausted overrode an otherwise-directional setup (see entry_quality.py)"
         return "no_trade: deterministic direction gate not met (score below threshold, or timeframe trend split)"
     if not in_top_candidates:
         return f"rank {rank} outside top {LLM_CANDIDATES} candidates this cycle"
+    if entry_quality == "late":
+        return "entry_quality=late — setup direction stands, but a new/refreshed plan is withheld until entry improves"
     if not explained_this_cycle:
         return "in top candidates but not (re)explained this cycle (see llm_gate.should_reexplain)"
     return None
@@ -210,6 +220,9 @@ async def _run_scan() -> dict:
                 symbol, plan, item["breakdown"], item["features"],
                 item["history_stats"], item["ml_prediction"], regime, now_ms,
                 confidence=plan.confidence, grade=plan.grade,
+                entry_quality=plan.entry_quality,
+                entry_quality_score=plan.entry_quality_score,
+                entry_quality_reasons=plan.entry_quality_reasons,
             )
             explained += 1
 
@@ -247,6 +260,21 @@ def _persist_scan(scored: list, now_ms: int, regime_label: str | None) -> list:
             # column is meaningful for the whole universe, not just the
             # published subset.
             direction = decide_direction(features, breakdown)
+
+            # Entry-quality gate (app/engine/entry_quality.py) — a hypothesis
+            # layer built from the first 7-trade forensic analysis, kept
+            # deliberately separate from scoring.py's weights. "exhausted"
+            # forces no_trade for THIS symbol's ScanSnapshot/gating purposes
+            # (reasoning.py:_precompute applies the identical override for
+            # whatever Claude actually sees, so both paths agree). "late"
+            # does NOT change direction — it only withholds a NEW/refreshed
+            # plan below, reusing the existing to_explain/needs_llm gate
+            # rather than touching lifecycle.py's state machine.
+            entry_quality_data = classify_entry_quality(features, direction, breakdown)
+            entry_quality = entry_quality_data["entry_quality"]
+            if entry_quality == "exhausted" and direction in ("long", "short"):
+                direction = "no_trade"
+
             in_top_candidates = rank < LLM_CANDIDATES
             had_active_plan = row.trade_plan is not None if row else False
 
@@ -260,6 +288,8 @@ def _persist_scan(scored: list, now_ms: int, regime_label: str | None) -> list:
                     direction,
                     now_ms,
                 )
+                if entry_quality == "late":
+                    needs_llm = False
 
             session.add(
                 ScanSnapshot(
@@ -274,7 +304,7 @@ def _persist_scan(scored: list, now_ms: int, regime_label: str | None) -> list:
                     had_active_plan=had_active_plan,
                     market_regime=regime_label,
                     rejection_reason=_rejection_reason(
-                        direction, rank, in_top_candidates, needs_llm, had_active_plan
+                        direction, rank, in_top_candidates, needs_llm, had_active_plan, entry_quality
                     ),
                 )
             )

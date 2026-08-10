@@ -102,6 +102,9 @@ def open_trade_outcome(
     now_ms: int,
     confidence: int | None = None,
     grade: str | None = None,
+    entry_quality: str | None = None,
+    entry_quality_score: float | None = None,
+    entry_quality_reasons: list | None = None,
 ) -> None:
     """No-op for no_trade recommendations or plans missing the numeric
     levels needed to track a position — there's nothing to follow."""
@@ -183,6 +186,9 @@ def open_trade_outcome(
             prompt_version=PROMPT_VERSION,
             ml_model_version=(ml_prediction or {}).get("model_version"),
             entry_indicators=_capture_entry_indicators(features),
+            entry_quality=entry_quality,
+            entry_quality_score=entry_quality_score,
+            entry_quality_reasons=entry_quality_reasons,
         )
         session.add(row)
         session.commit()

@@ -115,6 +115,14 @@ class TradePlan(BaseModel):
     # Deterministic pass/fail on each factor (app/engine/decision.py)  —
     # Claude may reference these in its reasoning, it doesn't compute them.
     checklist: dict[str, bool] = {}
+    # Entry-timing/exhaustion classification — app/engine/entry_quality.py.
+    # A separate diagnostic axis from `confidence`/`grade`: those measure
+    # whether the SETUP is good; this measures whether NOW is a good time
+    # to enter it. Deterministic, computed before Claude runs; Claude may
+    # explain it but never sets or overrides it.
+    entry_quality: str | None = None  # excellent | good | neutral | late | exhausted | invalid
+    entry_quality_score: float | None = None
+    entry_quality_reasons: list[str] = []
     # A short "why does this setup exist" line, distinct from the longer
     # `summary` below — Claude's, but constrained to the fixed direction.
     thesis: str | None = None

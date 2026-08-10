@@ -16,7 +16,7 @@ from collections import defaultdict
 from sqlalchemy import select
 
 from app.db import SessionLocal
-from app.models.db_models import TradeOutcome
+from app.models.db_models import ScanSnapshot, TradeOutcome
 
 _RESOLVED_STATUSES = ("closed_win", "closed_loss", "closed_stale")
 _MIN_GROUP_SAMPLE = 3
@@ -588,6 +588,152 @@ def momentum_vs_time_to_tp1(min_sample: int = 5) -> dict:
             "reaches TP1 faster, not whether it wins more. A component "
             "can be 'good' on one axis and neutral on the other — this is "
             "why they're separate reports, not combined into one number."
+        ),
+    }
+
+
+_ENTRY_QUALITY_BUCKETS = ("excellent", "good", "neutral", "late", "exhausted", "invalid")
+
+
+def entry_quality_performance(min_sample: int = 5) -> dict:
+    """Compares real resolved-trade outcomes across entry_quality buckets
+    (app/engine/entry_quality.py) — built after the first 7-trade forensic
+    analysis as a HYPOTHESIS, not a validated signal. entry_quality is not
+    fed back into score/confidence, so this report is purely descriptive:
+    it says what happened in resolved trades so far, not what will happen.
+    Only trades with a stored entry_quality are included — this field was
+    added after most existing rows, which are honestly excluded rather
+    than backfilled with a guess. Gated per-bucket behind min_sample; says
+    "insufficient sample size" rather than drawing a conclusion from a
+    handful of trades."""
+    session = SessionLocal()
+    try:
+        rows = (
+            session.execute(
+                select(TradeOutcome).where(
+                    TradeOutcome.status.in_(_RESOLVED_STATUSES),
+                    TradeOutcome.entry_quality.is_not(None),
+                )
+            )
+            .scalars()
+            .all()
+        )
+    finally:
+        session.close()
+
+    buckets = {}
+    for quality in _ENTRY_QUALITY_BUCKETS:
+        in_bucket = [r for r in rows if r.entry_quality == quality]
+        if len(in_bucket) < min_sample:
+            buckets[quality] = {
+                "sample_size": len(in_bucket),
+                "note": f"Insufficient sample size — need >= {min_sample}, have {len(in_bucket)}.",
+            }
+            continue
+
+        traded = [r for r in in_bucket if r.status in ("closed_win", "closed_loss")]
+        returns = [r.realized_return_pct for r in traded if r.realized_return_pct is not None]
+        mfe = [r.max_runup_pct for r in in_bucket if r.max_runup_pct is not None]
+        mae = [r.max_drawdown_pct for r in in_bucket if r.max_drawdown_pct is not None]
+        holding = [r.holding_minutes for r in in_bucket if r.holding_minutes is not None]
+
+        buckets[quality] = {
+            "sample_size": len(in_bucket),
+            "tp1_hit_rate_pct": round(sum(1 for r in in_bucket if r.tp1_hit) / len(in_bucket) * 100, 1),
+            "tp2_hit_rate_pct": round(sum(1 for r in in_bucket if r.tp2_hit) / len(in_bucket) * 100, 1),
+            "tp3_hit_rate_pct": round(sum(1 for r in in_bucket if r.tp3_hit) / len(in_bucket) * 100, 1),
+            "stop_before_tp1_rate_pct": round(
+                sum(1 for r in in_bucket if r.stop_hit and not r.tp1_hit) / len(in_bucket) * 100, 1
+            ),
+            "average_return_pct": round(statistics.mean(returns), 2) if returns else None,
+            "median_return_pct": round(statistics.median(returns), 2) if returns else None,
+            "avg_mfe_pct": round(statistics.mean(mfe), 2) if mfe else None,
+            "avg_mae_pct": round(statistics.mean(mae), 2) if mae else None,
+            "avg_holding_minutes": round(statistics.mean(holding), 1) if holding else None,
+        }
+
+    return {
+        "total_eligible": len(rows),
+        "buckets": buckets,
+        "note": (
+            "entry_quality is a hypothesis layer under active data collection — "
+            "this report describes what happened in resolved trades so far, it "
+            "does NOT establish predictive value. Not a substitute for a real "
+            "out-of-sample test."
+        ),
+    }
+
+
+_MOMENTUM_SCORE_BUCKET_RANGES = [(0, 8, "0-7"), (8, 12, "8-11"), (12, 15, "12-14"), (15, 16, "15")]
+
+
+def momentum_score_bucket_performance(min_sample: int = 5) -> dict:
+    """The exact bucket edges requested for the entry-quality investigation
+    (0-7 / 8-11 / 12-14 / 15) — distinct from momentum_vs_runup()'s 3-point
+    buckets, which answer a different question (MFE/MAE by momentum, not
+    win rate/return). Deliberately does NOT claim a pattern below
+    min_sample."""
+    session = SessionLocal()
+    try:
+        rows = session.execute(select(TradeOutcome).where(TradeOutcome.status.in_(_RESOLVED_STATUSES))).scalars().all()
+    finally:
+        session.close()
+
+    buckets = []
+    for lo, hi, label in _MOMENTUM_SCORE_BUCKET_RANGES:
+        in_bucket = [r for r in rows if lo <= r.momentum_score < hi]
+        entry = {"momentum_range": label, "sample_size": len(in_bucket)}
+        if len(in_bucket) < min_sample:
+            entry["note"] = f"Insufficient sample size — need >= {min_sample}, have {len(in_bucket)}."
+        else:
+            traded = [r for r in in_bucket if r.status in ("closed_win", "closed_loss")]
+            returns = [r.realized_return_pct for r in traded if r.realized_return_pct is not None]
+            entry["win_rate_pct"] = (
+                round(sum(1 for r in traded if r.status == "closed_win") / len(traded) * 100, 1) if traded else None
+            )
+            entry["average_return_pct"] = round(statistics.mean(returns), 2) if returns else None
+        buckets.append(entry)
+
+    return {"total_eligible": len(rows), "buckets": buckets}
+
+
+def signal_direction_counts(start_ms: int, end_ms: int) -> dict:
+    """How many long/short/no_trade DECISIONS the deterministic engine
+    actually made across the FULL scanned universe in this window — not
+    just the top-ranked ones that became a published trade. Reads
+    ScanSnapshot (every scanned symbol, every cycle), a different question
+    from direction_breakdown() (outcomes of PUBLISHED trades only). Exists
+    because the resolved TradeOutcome sample has so far been 100% long —
+    this answers whether that's because the engine never even considers a
+    short, or because shorts are considered and rejected, without assuming
+    either is a bug."""
+    session = SessionLocal()
+    try:
+        rows = (
+            session.execute(
+                select(ScanSnapshot.direction).where(
+                    ScanSnapshot.timestamp >= start_ms, ScanSnapshot.timestamp < end_ms
+                )
+            )
+            .scalars()
+            .all()
+        )
+    finally:
+        session.close()
+
+    if not rows:
+        return {"note": "No ScanSnapshot rows in this window yet — this table only started being written this session."}
+
+    counts = {"long": rows.count("long"), "short": rows.count("short"), "no_trade": rows.count("no_trade")}
+    total = len(rows)
+    return {
+        "total_scans": total,
+        "counts": counts,
+        "pct": {k: round(v / total * 100, 1) for k, v in counts.items()},
+        "note": (
+            "Counts every scanned symbol every cycle, not just published trades — "
+            "measures what the deterministic engine actually decides across the "
+            "whole universe."
         ),
     }
 

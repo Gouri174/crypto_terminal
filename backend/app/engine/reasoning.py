@@ -7,6 +7,7 @@ import anthropic
 from app.config import ANTHROPIC_MAX_TOKENS, ANTHROPIC_MAX_TOKENS_SHORT, ANTHROPIC_MODEL, LLM_CANDIDATES
 from app.engine.confidence import compute_confidence
 from app.engine.decision import decide_direction, market_checklist, trade_grade
+from app.engine.entry_quality import classify_entry_quality
 from app.models.schemas import ConfidenceBreakdown, HistoryMatch, MLPrediction, ScoreBreakdown, TradePlan
 
 # Explicit timeout: found live that the SDK's default let a call hang for
@@ -69,6 +70,24 @@ structure, volume, funding, history, regime, and risk confirmation) and
 any checklist item that failed in your reasoning — don't just restate a
 number, explain what a "false" means for this specific setup.
 
+You are also given `precomputed_entry_quality` — a SEPARATE deterministic
+classification from confidence/grade, answering "is right now a good time
+to enter" rather than "is this a good setup." One of: excellent, good,
+neutral, late, exhausted, invalid — with `precomputed_entry_quality_reasons`
+explaining exactly why (e.g. specific overbought timeframes, ATR distance
+from EMA20, whether structure is freshly confirming). You do not choose or
+override this value, and you must never state a different entry-quality
+read than what's given. If it is "late," say so explicitly and frame the
+setup as "the direction may be right, but the entry is stretched — a
+pullback or fresh confirmation would improve it," not as an outright buy.
+If it is "exhausted," `precomputed_direction` will already read "no_trade"
+for this reason — explain that the higher-timeframe/multi-signal setup may
+still be directionally right, but price is currently overextended enough
+that entering now would be poor timing, not that the underlying thesis is
+wrong. This classification is a hypothesis under active data collection —
+do not claim it is proven predictive; describe what it observed, not what
+it guarantees.
+
 If `alternative_candidate` is present, it's the next-best-ranked setup
 from this SAME scan cycle (symbol, its own score, and its own
 deterministic direction) — not a suggestion you're generating, a fact
@@ -111,8 +130,9 @@ matching effort to how much this particular call actually matters."""
 JSON_INSTRUCTIONS_FULL = """
 Respond with ONLY a single JSON object — no markdown code fences, no text
 before or after it — matching exactly this shape. Do NOT include
-"recommendation", "confidence", "checklist", or "grade" — those are fixed
-by the engine and added by the caller, not written by you:
+"recommendation", "confidence", "checklist", "grade", "entry_quality",
+"entry_quality_score", or "entry_quality_reasons" — those are fixed by the
+engine and added by the caller, not written by you:
 
 {
   "entry_low": number or null,
@@ -148,7 +168,8 @@ JSON_INSTRUCTIONS_SHORT = """
 Respond with ONLY a single JSON object — no markdown code fences, no text
 before or after it — matching exactly this shape (this is the SHORT form —
 see the adaptive length note above). Do NOT include "recommendation",
-"confidence", "checklist", or "grade":
+"confidence", "checklist", "grade", "entry_quality", "entry_quality_score",
+or "entry_quality_reasons":
 
 {
   "entry_low": number or null,
@@ -201,6 +222,8 @@ def build_user_prompt(
     checklist: dict,
     grade: str,
     alternative: dict | None,
+    entry_quality: str | None = None,
+    entry_quality_reasons: list | None = None,
 ) -> str:
     payload = {
         "market_data": features,
@@ -211,6 +234,8 @@ def build_user_prompt(
         "confidence_penalties": confidence_data["penalties"],
         "precomputed_checklist": checklist,
         "precomputed_grade": grade,
+        "precomputed_entry_quality": entry_quality,
+        "precomputed_entry_quality_reasons": entry_quality_reasons,
         "history_match": history_stats,
         "market_regime": regime,
         "ml_prediction": ml_prediction,
@@ -229,6 +254,18 @@ def build_user_prompt(
 
 def _precompute(symbol, features, breakdown, history_stats, ml_prediction, alternative) -> dict:
     direction = decide_direction(features, breakdown)
+
+    # Entry-quality gate: computed against the RAW direction (before any
+    # override) so entry_quality_reasons stay meaningful even when the
+    # setup is about to be downgraded. Only "exhausted" forces an override
+    # here — "late" is deliberately NOT auto-rejected (see entry_quality.py
+    # module docstring and background_scanner.py's issuance gate, which
+    # separately suppresses a NEW/refreshed plan for "late" setups without
+    # touching direction itself). This never changes breakdown["total"].
+    entry_quality_data = classify_entry_quality(features, direction, breakdown)
+    if entry_quality_data["entry_quality"] == "exhausted" and direction in ("long", "short"):
+        direction = "no_trade"
+
     confidence_data = compute_confidence(direction, breakdown, features, history_stats, ml_prediction)
     checklist = market_checklist(breakdown, history_stats)
     grade = trade_grade(confidence_data["confidence"])
@@ -237,6 +274,9 @@ def _precompute(symbol, features, breakdown, history_stats, ml_prediction, alter
         "history_stats": history_stats, "ml_prediction": ml_prediction, "alternative": alternative,
         "direction": direction, "confidence_data": confidence_data, "checklist": checklist, "grade": grade,
         "schema": "short" if grade in _LOW_GRADES else "full",
+        "entry_quality": entry_quality_data["entry_quality"],
+        "entry_quality_score": entry_quality_data["entry_quality_score"],
+        "entry_quality_reasons": entry_quality_data["entry_quality_reasons"],
     }
 
 
@@ -250,6 +290,9 @@ def _finalize_plan(data: dict, pre: dict) -> TradePlan:
     data["confidence"] = pre["confidence_data"]["confidence"]
     data["checklist"] = pre["checklist"]
     data["grade"] = pre["grade"]
+    data["entry_quality"] = pre["entry_quality"]
+    data["entry_quality_score"] = pre["entry_quality_score"]
+    data["entry_quality_reasons"] = pre["entry_quality_reasons"]
 
     alt_reason = data.pop("alternative_trade_reason", None)
     alternative = pre["alternative"]
@@ -289,6 +332,7 @@ def analyze_symbol(
                 "content": build_user_prompt(
                     features, score_breakdown, history_stats, regime, ml_prediction,
                     pre["direction"], pre["confidence_data"], pre["checklist"], pre["grade"], alternative,
+                    pre["entry_quality"], pre["entry_quality_reasons"],
                 ),
             }
         ],
@@ -327,6 +371,8 @@ def build_batch_user_prompt(pre_items: list[dict], regime: dict | None) -> str:
             "confidence_penalties": pre["confidence_data"]["penalties"],
             "precomputed_checklist": pre["checklist"],
             "precomputed_grade": pre["grade"],
+            "precomputed_entry_quality": pre["entry_quality"],
+            "precomputed_entry_quality_reasons": pre["entry_quality_reasons"],
             "history_match": pre["history_stats"],
             "ml_prediction": pre["ml_prediction"],
             "alternative_candidate": pre["alternative"],

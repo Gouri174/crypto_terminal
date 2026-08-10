@@ -614,6 +614,84 @@ computed score, not parsed from what Claude claims it is.
   function built on top yet; needs real volume (weeks, not the current
   handful of cycles) before a rank-vs-outcome comparison would mean
   anything.
+- **Entry-quality / exhaustion diagnostic** (`app/engine/entry_quality.py`):
+  built after a forensic read of the first 7 resolved trades found 5 of 6
+  losses had a maxed `momentum_score`, while the sole win had the lowest
+  momentum score of all 7. **That finding does NOT mean momentum is bad** —
+  checked `scoring.py:_momentum_score` directly: a score of 15 requires RSI
+  in the MODERATE 40-65 band plus a positive MACD histogram; extreme RSI
+  readings score only 2 there, explicitly marked "lower quality entry."
+  So momentum_score alone cannot be the exhaustion signal — this module
+  answers a different question from scoring.py entirely: given a direction
+  has already been decided, is RIGHT NOW a good time to enter it, or is
+  price already stretched away from where the setup was confirmed?
+  Deterministic, `entry_quality: excellent | good | neutral | late |
+  exhausted | invalid`, built from indicators already computed nowhere
+  else new — multi-timeframe RSI/stochRSI/BB% extremes, distance from the
+  4h EMA20 in ATR units, whether 4h structure freshly confirms the
+  direction (BOS/FVG, not just "not neutral"), and multi-timeframe trend
+  alignment. **Does not touch `scoring.py`'s weights or `total`** — a
+  dedicated test (`test_entry_quality.py`) hand-verifies the score formula
+  is byte-identical before/after. Validated against the spec's four
+  worked cases (healthy trend, overextended, weak-everything, healthy
+  pullback) AND the real forensic BICOUSDT loss specifically — that trade
+  had fresh bullish structure (FVG present) right before a -44% reversal,
+  which is why "exhausted" triggers on severe multi-signal extension
+  (≥4 independent overbought/oversold readings across 1h/4h/1d) REGARDLESS
+  of structure quality, not only when structure is also weak.
+  - **Gating, kept conservative per the spec**: `exhausted` overrides
+    direction to `no_trade` (in `reasoning.py:_precompute`, the same funnel
+    both the scanner and on-demand `/api/analyze` already share — no
+    duplicated logic). `late` does NOT touch direction or reject the
+    setup; it only withholds issuing/refreshing a plan THIS cycle, reusing
+    the scanner's existing `needs_llm`/`to_explain` gate
+    (`background_scanner.py`) rather than inventing a new confirmation
+    mechanism or touching `lifecycle.py`'s state machine — a deliberate,
+    documented choice to satisfy "use existing states if the architecture
+    supports it" via the smallest safe surface, not the lifecycle
+    transitions themselves.
+  - **Claude explains it, never sets it**: `precomputed_entry_quality` and
+    `precomputed_entry_quality_reasons` are injected into the prompt
+    exactly like direction/confidence/checklist/grade already are; the
+    JSON schema explicitly forbids Claude from emitting `entry_quality`
+    fields, and `_finalize_plan()` overwrites them from the engine
+    regardless of what Claude returns.
+  - **Persisted per-trade** (`TradeOutcome.entry_quality`,
+    `entry_quality_score`, `entry_quality_reasons` — new nullable columns,
+    older rows honestly left `NULL`, never backfilled) and exposed on
+    `TradePlan`/`Opportunity` API responses.
+  - **Diagnostics** (`GET /api/outcomes/entry-quality`,
+    `GET /api/outcomes/momentum-buckets`,
+    `GET /api/outcomes/signal-directions`): bucket resolved trades by
+    entry_quality (TP1/2/3 hit rate, stop-before-TP1 rate, avg/median
+    return, MFE, MAE, holding time) and by the exact momentum_score ranges
+    used to investigate the forensic finding (0-7/8-11/12-14/15) — both
+    gated behind a minimum sample and explicit about being a hypothesis
+    under active collection, not a validated signal.
+    `signal_direction_counts()` reads `ScanSnapshot` (the FULL scanned
+    universe, not just published trades) to separate "does the engine ever
+    consider a short" from "did a short ever get published" — the two
+    resolved-trade digests alone couldn't tell those apart.
+  - **Verified live, real data, no synthetic substitutes**: the
+    momentum-bucket report already shows the maxed-momentum (15) bucket at
+    5 resolved trades, 0% win rate, -7.02% average return — a real,
+    current confirmation of the forensic pattern, not a backtest. The
+    signal-direction report shows the engine actually generated 143 real
+    short-direction scans out of 1085 in the last 7 days (13.2%) — the
+    100%-long resolved-trade sample was a *published-trade* artifact, not
+    evidence the engine never considers shorts. Ran `analyze_symbol()`
+    live (bypassing cache) for BTCUSDT/ETHUSDT/SOLUSDT: all three
+    correctly returned real, symbol-specific `entry_quality`/
+    `entry_quality_reasons` (e.g. `"1d stochRSI 1.00 extreme (>0.95)"` for
+    BTC), `recommendation` stayed `long` in the two `late` cases (not
+    auto-rejected, per spec), and the full `/api/analyze` HTTP response
+    was confirmed to serialize the new fields end-to-end. 13/13 new tests
+    and all 17 pre-existing tests pass; zero regressions.
+  - **Predictive value: not established, and not claimed to be.** This is
+    a hypothesis and instrumentation layer under active data collection —
+    the diagnostics above will say "insufficient sample size" until real
+    resolved-trade volume says otherwise. No scoring weight changed as a
+    result of building this.
 
 ## Roadmap — what's NOT implemented yet, and why
 

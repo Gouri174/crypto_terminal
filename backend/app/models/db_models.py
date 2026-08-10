@@ -244,6 +244,15 @@ class TradeOutcome(Base):
     tp2_hit_at: Mapped[int | None] = mapped_column(Integer, nullable=True)
     tp3_hit_at: Mapped[int | None] = mapped_column(Integer, nullable=True)
 
+    # Entry-timing/exhaustion diagnostic — see app/engine/entry_quality.py.
+    # A hypothesis layer built after the first 7-trade forensic analysis,
+    # NOT fed back into `score` or `confidence` above. Only ever set on
+    # NEW trades from the point this shipped; older rows honestly leave
+    # these NULL rather than being backfilled with a guess.
+    entry_quality: Mapped[str | None] = mapped_column(String(20), nullable=True)
+    entry_quality_score: Mapped[float | None] = mapped_column(Float, nullable=True)
+    entry_quality_reasons: Mapped[list | None] = mapped_column(JSON, nullable=True)
+
 
 class PredictionSnapshot(Base):
     """One deterministic validation check of an OPEN TradeOutcome, recorded
