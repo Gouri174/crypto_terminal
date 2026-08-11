@@ -692,6 +692,32 @@ computed score, not parsed from what Claude claims it is.
     the diagnostics above will say "insufficient sample size" until real
     resolved-trade volume says otherwise. No scoring weight changed as a
     result of building this.
+- **Deep trade intelligence / forensic analysis layer** (`app/engine/forensic_diagnostics.py`,
+  `GET /api/diagnostics/{trades,patterns,calibration,entry-quality,direction,
+  regime,correlation,ranking,daily-report}`): measurement only — zero lines
+  changed in `scoring.py`, `confidence.py`, `decision.py`, `lifecycle.py`,
+  `ml_model.py`, or `reasoning.py`'s decision logic (verified via
+  `git diff --stat` on those files before committing). Built to answer
+  *why* the system is winning or losing at a real (if still small) 10-trade
+  resolved sample — full per-trade autopsy, TP1→TP2→TP3→stop path
+  classification (A–G), holding-time/time-of-day/stop-target-R:R buckets,
+  feature-interaction search across ALL resolved trades (not cherry-picked
+  to fit known losses), multi-tag failure clustering, an approximated and
+  clearly-labeled entry-shift counterfactual, and a ranking backtest
+  explicitly scoped to trades that were actually published (not a full-
+  universe top-N simulation — no outcome data exists for symbols that
+  never got a `trade_plan`). Reuses `trade_reports.py`'s existing
+  `confidence_calibration`/`grade_calibration`/`entry_quality_performance`/
+  `momentum_score_bucket_performance`/`direction_breakdown`/
+  `signal_direction_counts` rather than duplicating them. Every function
+  returns `NOT STORED`/`NULL` for genuinely missing data (e.g.
+  `macd_hist`/`cmf`/`mfi`/`bb_pct` at entry — `entry_indicators` only ever
+  captured RSI/stochRSI/ADX/EMA-distances) instead of reconstructing it
+  from current prices. **No pattern from this layer is ever labeled
+  CONFIRMED** — `feature_interaction_discovery()` caps every verdict at
+  POSSIBLE/INSUFFICIENT DATA regardless of sample size, since n=10 (1 win)
+  cannot honestly support statistical confirmation. See the delivered
+  findings report for what this surfaced on real data.
 
 ## Roadmap — what's NOT implemented yet, and why
 
