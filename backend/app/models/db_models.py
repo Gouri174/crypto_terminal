@@ -253,6 +253,28 @@ class TradeOutcome(Base):
     entry_quality_score: Mapped[float | None] = mapped_column(Float, nullable=True)
     entry_quality_reasons: Mapped[list | None] = mapped_column(JSON, nullable=True)
 
+    # V1.1 data-collection pass (app/engine/trade_outcomes.py:_close_trade) —
+    # the actual observed close price, distinct from `stop_loss`/tp levels.
+    # Lets a stop-exit's real fill be compared against the intended stop,
+    # separating "the market moved fast between 5-min scan cycles" from "the
+    # prediction was simply wrong" — see stop_slippage_pct below. NULL for
+    # trades that closed before this shipped, and for any trade still open.
+    exit_price: Mapped[float | None] = mapped_column(Float, nullable=True)
+    # Only meaningful when the close reason was "stop" — how far past the
+    # intended stop_loss price the scanner's next 5-min check actually
+    # observed. This is SCANNER_OBSERVED_STOP vs intended stop_loss, not a
+    # true tick-level STOP_LEVEL_CROSSED timestamp — this app has no tick
+    # data source, so that finer distinction is honestly not computable;
+    # documented here rather than faked.
+    stop_slippage_pct: Mapped[float | None] = mapped_column(Float, nullable=True)
+
+    # V1.1: deterministic diagnostic tags computed once at issuance from
+    # already-available data (see app/engine/entry_flags.py) — observational
+    # labels for later analysis, e.g. HIGH_MOMENTUM_WEAK_STRUCTURE,
+    # CLUSTERED_MARKET_EXPOSURE. Never used to reject or change a trade in
+    # this pass; a measurement variable only, same as entry_quality above.
+    diagnostic_flags: Mapped[list | None] = mapped_column(JSON, nullable=True)
+
 
 class PredictionSnapshot(Base):
     """One deterministic validation check of an OPEN TradeOutcome, recorded
@@ -361,3 +383,19 @@ class ScanSnapshot(Base):
     # cycle; otherwise a plain-English reason it wasn't. See
     # background_scanner.py:_rejection_reason.
     rejection_reason: Mapped[str | None] = mapped_column(String(200), nullable=True)
+
+    # V1.1: full-candidate-pool visibility (not just published trades) —
+    # answers "why did the system choose these 5 instead of the others."
+    # All computed deterministically for EVERY scanned symbol in
+    # background_scanner.py:_persist_scan — compute_confidence()/
+    # trade_grade()/classify_entry_quality() are pure Python, no Claude
+    # call, so this costs nothing extra to compute for the whole universe.
+    confidence: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    grade: Mapped[str | None] = mapped_column(String(10), nullable=True)
+    entry_quality: Mapped[str | None] = mapped_column(String(20), nullable=True)
+    ml_probability: Mapped[float | None] = mapped_column(Float, nullable=True)
+    historic_probability: Mapped[float | None] = mapped_column(Float, nullable=True)
+    # Only populated when this symbol already has a live trade_plan this
+    # cycle (entry/stop/tp1 exist to compute a ratio from) — null otherwise,
+    # never estimated for a candidate that was never given levels.
+    risk_reward_tp1: Mapped[float | None] = mapped_column(Float, nullable=True)

@@ -846,4 +846,233 @@ def daily_market_regime_report(regime: dict | None, day_ms: int = 86_400_000) ->
             "long_candidates_delta": (long_now - long_yday) if yesterday_scans else "NOT STORED (no scan data from ~24h ago yet)",
             "short_candidates_delta": (short_now - short_yday) if yesterday_scans else "NOT STORED (no scan data from ~24h ago yet)",
         },
+        "signal_funnel_24h": signal_funnel_report(now_ms - day_ms, now_ms),
+        "todays_signal_stats": _signals_issued_today_stats(now_ms - day_ms, now_ms),
+    }
+
+
+# ---------------------------------------------------------------------------
+# V1.1: signal funnel
+# ---------------------------------------------------------------------------
+
+_FUNNEL_RESOLVED = ("closed_win", "closed_loss", "closed_stale", "invalidated")
+
+
+def signal_funnel_report(start_ms: int, end_ms: int) -> dict:
+    """Universe -> Candidates -> Top-N pool -> Published -> Triggered ->
+    Resolved, counted as DISTINCT symbols in the window (a symbol ranked
+    top-5 every cycle for a day counts once here, not once per cycle) —
+    lets you read left-to-right for where the drop-off is largest: too many
+    candidates, poor ranking, poor entries, or poor trade management."""
+    session = SessionLocal()
+    try:
+        scans = session.execute(
+            select(ScanSnapshot).where(ScanSnapshot.timestamp >= start_ms, ScanSnapshot.timestamp < end_ms)
+        ).scalars().all()
+        trades = session.execute(
+            select(TradeOutcome).where(TradeOutcome.created_at >= start_ms, TradeOutcome.created_at < end_ms)
+        ).scalars().all()
+    finally:
+        session.close()
+
+    universe_symbols = {s.symbol for s in scans}
+    candidate_symbols = {s.symbol for s in scans if s.direction in ("long", "short")}
+    top_pool_symbols = {s.symbol for s in scans if s.in_top_candidates}
+    published_symbols = {t.symbol for t in trades if t.status != "rejected_avoid"}
+    avoided_symbols = {t.symbol for t in trades if t.status == "rejected_avoid"}
+    triggered_symbols = {t.symbol for t in trades if t.entry_hit}
+    resolved_symbols = {t.symbol for t in trades if t.status in _FUNNEL_RESOLVED}
+
+    return {
+        "window": {"start_ms": start_ms, "end_ms": end_ms},
+        "universe": len(universe_symbols),
+        "candidates_long_or_short": len(candidate_symbols),
+        "top_candidate_pool": len(top_pool_symbols),
+        "published_as_trades": len(published_symbols),
+        "avoided_grade_avoid": len(avoided_symbols),
+        "entry_triggered": len(triggered_symbols),
+        "resolved": len(resolved_symbols),
+        "note": (
+            "Distinct symbols per stage, not raw rows. Read left to right: "
+            "a big drop from universe->candidates means most symbols never "
+            "get a directional read; candidates->top_candidate_pool means "
+            "ranking is the bottleneck; top_candidate_pool->published means "
+            "entry_quality/should_reexplain gating is suppressing plans; "
+            "published->entry_triggered means price rarely reaches the "
+            "proposed entry zone; entry_triggered->resolved just reflects "
+            "trades still open."
+        ),
+    }
+
+
+_STRUCTURE_WEAK_BELOW = 8.0
+_STRUCTURE_STRONG_AT_LEAST = 11.0
+
+
+def _signals_issued_today_stats(start_ms: int, end_ms: int) -> dict:
+    """Average score/confidence/R:R and entry-quality/momentum/structure
+    distributions, plus ML/history support counts, for NEW signals issued
+    in the window — the section 10 "daily diagnostic report" breakdowns.
+    Includes rejected_avoid rows in the counts (labeled) but excludes them
+    from the averages, since they were never real recommendations."""
+    session = SessionLocal()
+    try:
+        rows = session.execute(
+            select(TradeOutcome).where(TradeOutcome.created_at >= start_ms, TradeOutcome.created_at < end_ms)
+        ).scalars().all()
+    finally:
+        session.close()
+
+    real = [r for r in rows if r.status != "rejected_avoid"]
+    if not real:
+        return {"signals_issued": len(rows), "avoided": len(rows) - len(real), "note": "No new signals issued in this window yet."}
+
+    scores = [r.score for r in real if r.score is not None]
+    confidences = [r.confidence for r in real if r.confidence is not None]
+    rr_tp1s, rr_tp2s, rr_tp3s = [], [], []
+    for r in real:
+        rr = (r.entry_indicators or {}).get("risk_reward") or {}
+        if rr.get("rr_tp1") is not None:
+            rr_tp1s.append(rr["rr_tp1"])
+        if rr.get("rr_tp2") is not None:
+            rr_tp2s.append(rr["rr_tp2"])
+        if rr.get("rr_tp3") is not None:
+            rr_tp3s.append(rr["rr_tp3"])
+
+    eq_dist: dict[str, int] = defaultdict(int)
+    for r in real:
+        eq_dist[r.entry_quality or "NOT STORED"] += 1
+
+    momentum_dist = {"0-7": 0, "8-11": 0, "12-14": 0, "15": 0}
+    for r in real:
+        m = r.momentum_score
+        if m < 8:
+            momentum_dist["0-7"] += 1
+        elif m < 12:
+            momentum_dist["8-11"] += 1
+        elif m < 15:
+            momentum_dist["12-14"] += 1
+        else:
+            momentum_dist["15"] += 1
+
+    structure_dist = {"weak": 0, "medium": 0, "strong": 0}
+    for r in real:
+        if r.structure_score < _STRUCTURE_WEAK_BELOW:
+            structure_dist["weak"] += 1
+        elif r.structure_score < _STRUCTURE_STRONG_AT_LEAST:
+            structure_dist["medium"] += 1
+        else:
+            structure_dist["strong"] += 1
+
+    ml_only = sum(1 for r in real if r.ml_probability is not None and r.historic_probability is None)
+    hist_only = sum(1 for r in real if r.historic_probability is not None and r.ml_probability is None)
+    both = sum(1 for r in real if r.ml_probability is not None and r.historic_probability is not None)
+    neither = sum(1 for r in real if r.ml_probability is None and r.historic_probability is None)
+
+    return {
+        "signals_issued": len(real),
+        "avoided_grade_avoid": len(rows) - len(real),
+        "average_score": round(statistics.mean(scores), 2) if scores else None,
+        "average_confidence": round(statistics.mean(confidences), 2) if confidences else None,
+        "average_rr_tp1": round(statistics.mean(rr_tp1s), 3) if rr_tp1s else None,
+        "average_rr_tp2": round(statistics.mean(rr_tp2s), 3) if rr_tp2s else None,
+        "average_rr_tp3": round(statistics.mean(rr_tp3s), 3) if rr_tp3s else None,
+        "entry_quality_distribution": dict(eq_dist),
+        "momentum_distribution": momentum_dist,
+        "structure_distribution": structure_dist,
+        "evidence_support": {"ml_only": ml_only, "history_only": hist_only, "both": both, "neither": neither},
+    }
+
+
+# ---------------------------------------------------------------------------
+# V1.1: "why not" candidate comparison
+# ---------------------------------------------------------------------------
+
+def why_not_comparison(symbol: str, top_n: int = 3) -> dict:
+    """For a SELECTED symbol, finds the same scan cycle's next-best-ranked
+    candidates and states — from deterministic fields only, never Claude —
+    why each ranked where it did. No LLM call; every "reason" is a
+    plain comparison of already-computed score/confidence/entry_quality/
+    structure values."""
+    session = SessionLocal()
+    try:
+        selected = session.execute(
+            select(ScanSnapshot).where(ScanSnapshot.symbol == symbol.upper()).order_by(ScanSnapshot.timestamp.desc()).limit(1)
+        ).scalar_one_or_none()
+        if selected is None:
+            return {"symbol": symbol.upper(), "note": "No ScanSnapshot found for this symbol yet."}
+
+        same_cycle = session.execute(
+            select(ScanSnapshot)
+            .where(ScanSnapshot.timestamp == selected.timestamp, ScanSnapshot.symbol != symbol.upper())
+            .order_by(ScanSnapshot.rank)
+            .limit(top_n)
+        ).scalars().all()
+    finally:
+        session.close()
+
+    def _reasons(other: ScanSnapshot) -> list[str]:
+        reasons = []
+        if other.score_total < selected.score_total:
+            reasons.append(f"lower score ({other.score_total:g} vs {selected.score_total:g})")
+        if (other.confidence or 0) < (selected.confidence or 0):
+            reasons.append(f"lower confidence ({other.confidence} vs {selected.confidence})")
+        struct_other = (other.score_breakdown or {}).get("structure", 0)
+        struct_sel = (selected.score_breakdown or {}).get("structure", 0)
+        if struct_other < struct_sel:
+            reasons.append(f"weaker structure_score ({struct_other:g} vs {struct_sel:g})")
+        if other.entry_quality in ("late", "exhausted", "invalid") and selected.entry_quality not in ("late", "exhausted", "invalid"):
+            reasons.append(f"worse entry_quality ({other.entry_quality} vs {selected.entry_quality})")
+        if other.rejection_reason:
+            reasons.append(other.rejection_reason)
+        return reasons or ["ranked lower on total score with no single dominant factor"]
+
+    return {
+        "selected": {
+            "symbol": selected.symbol, "rank": selected.rank, "score": selected.score_total,
+            "confidence": selected.confidence, "grade": selected.grade, "entry_quality": selected.entry_quality,
+        },
+        "rejected_candidates": [
+            {
+                "symbol": o.symbol, "rank": o.rank, "score": o.score_total, "confidence": o.confidence,
+                "grade": o.grade, "entry_quality": o.entry_quality, "reasons": _reasons(o),
+            }
+            for o in same_cycle
+        ],
+        "as_of": selected.timestamp,
+    }
+
+
+# ---------------------------------------------------------------------------
+# V1.1: automatic data milestones
+# ---------------------------------------------------------------------------
+
+_MILESTONES = [
+    (10, "Basic TP/SL path shape, initial autopsy review. Not enough for any rate estimate."),
+    (25, "TP1 R:R persistence check, basic outcome patterns, first honest look at entry-quality vs outcome."),
+    (50, "Confidence/grade calibration buckets, entry-quality performance, structure/momentum interaction checks."),
+    (100, "Scoring-component evaluation (feature_importance's own gate), more robust ranking analysis."),
+    (250, "ML retraining consideration — still a floor, not a green light on its own."),
+    (500, "Stronger evidence base for structural strategy changes."),
+]
+
+
+def data_milestones() -> dict:
+    """A fixed lookup table, not a statistical claim — practical evidence
+    milestones for what becomes reasonable to test at each resolved-trade
+    count, per the V1.1 spec. Current count reads real TradeOutcome rows;
+    thresholds themselves are static and were not tuned to this dataset."""
+    resolved = len(_resolved_rows())
+    milestones = []
+    for count, what in _MILESTONES:
+        milestones.append({
+            "resolved_trades": count,
+            "reached": resolved >= count,
+            "what_can_now_be_tested": what,
+        })
+    next_milestone = next((m for m in milestones if not m["reached"]), None)
+    return {
+        "current_resolved_trades": resolved,
+        "milestones": milestones,
+        "next_milestone": next_milestone,
     }

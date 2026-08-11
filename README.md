@@ -718,6 +718,89 @@ computed score, not parsed from what Claude claims it is.
   POSSIBLE/INSUFFICIENT DATA regardless of sample size, since n=10 (1 win)
   cannot honestly support statistical confirmation. See the delivered
   findings report for what this surfaced on real data.
+- **V1.1 data-collection / trade-selection-safety pass** — a small, safe
+  pass built directly from the forensic report's own gaps. `scoring.py`,
+  `confidence.py`, `decision.py`, `lifecycle.py`, `ml_model.py`,
+  `market_regime.py`, and `reasoning.py` all have **zero lines changed**
+  (verified via `git diff --stat` before committing) — no new Claude calls
+  anywhere either.
+  - **Real safety fix, not just data collection**: an Avoid-grade
+    recommendation (confidence below `decision.py:trade_grade()`'s
+    existing Avoid threshold — no new threshold invented) used to still
+    get tracked as a normal `status="pending"` row, indistinguishable from
+    a real recommendation, because the short JSON schema still asks Claude
+    for numeric entry/stop/TP even on a low-conviction setup — a real BNB
+    "Avoid / 40 confidence" case was observed live. Now stored as
+    `status="rejected_avoid"` (`app/engine/trade_outcomes.py:open_trade_outcome`)
+    — still recorded for observability, but a status
+    `update_open_trades()` never picks up and every existing open/pending
+    query already excludes by construction, with zero changes needed
+    elsewhere.
+  - **Closed the `entry_indicators` gaps the forensic report flagged as
+    NOT STORED**: `macd_hist`, `cmf`, `mfi`, `bb_pct` are now captured (they
+    were already computed, just never persisted), plus `btc_trend`/
+    `breadth_bullish_pct`/`breadth_bearish_pct` from the regime dict
+    already passed into `open_trade_outcome()` — the best available
+    per-trade proxy for "what was the wider market doing" (see
+    `app/engine/entry_flags.py`).
+  - **Risk/reward computed once at issuance** (`entry_flags.compute_risk_reward`):
+    `risk_to_sl_pct`, `reward_to_tp{1,2,3}_pct`, `rr_tp{1,2,3}` — pure
+    arithmetic on already-decided levels, stored in `entry_indicators`,
+    exposed in the API, and displayed on the coin detail page ("Risk /
+    Reward — Computed, Not Guessed"). Does not change how entry/SL/TP are
+    generated, only measures them. **Verified live**: a real PAXGUSDT plan
+    showed `RR_TP1: 0.86` on the actual page — the same below-1.0 pattern
+    the forensic report found, now visible per-trade instead of only in a
+    retrospective report.
+  - **Deterministic diagnostic flags** (`entry_flags.compute_diagnostic_flags`,
+    new `TradeOutcome.diagnostic_flags` JSON column): `HIGH_MOMENTUM_WEAK_STRUCTURE`,
+    `HIGH_SCORE_WEAK_STRUCTURE`, `HIGH_ATR`, `OVERBOUGHT`, `NO_HISTORY`,
+    `NO_ML`, `LOW_TP1_RR`, `CLUSTERED_MARKET_EXPOSURE`, `LATE_ENTRY`,
+    `EXHAUSTED_ENTRY` — computed once at issuance, purely observational,
+    never used to reject a trade in this pass.
+  - **Market cluster classification** (`entry_flags.classify_market_cluster`):
+    a static, editable heuristic (BTC-correlated / ETH-correlated /
+    Commodity / Equity / Altcoin) — this app doesn't compute rolling
+    cross-asset correlations, so this is a coarse label for observability,
+    documented as such.
+  - **Same-window signal clustering captured at issuance**
+    (`_count_recent_same_window_signals`, same 4h window
+    `forensic_diagnostics.py` already uses) — feeds `CLUSTERED_MARKET_EXPOSURE`.
+  - **`exit_price` and `stop_slippage_pct`** (new nullable `TradeOutcome`
+    columns): the actual observed close price and how far past the
+    intended stop it landed. Honestly labeled `SCANNER_OBSERVED_STOP`, not
+    a true tick-level `STOP_LEVEL_CROSSED` — this app has no tick data
+    source, so that finer distinction the forensic report asked about
+    isn't computable without a real data-source change, documented rather
+    than faked.
+  - **Full candidate-pool visibility** (`ScanSnapshot` extended with
+    `confidence`, `grade`, `entry_quality`, `ml_probability`,
+    `historic_probability`, `risk_reward_tp1` — computed for the WHOLE
+    scanned universe every cycle, not just published trades, since
+    `compute_confidence()`/`trade_grade()` are pure Python with zero
+    Claude cost): answers "why did the system choose these instead of the
+    others" without a second explain step.
+  - **New reports, all measurement-only** (`app/engine/forensic_diagnostics.py`,
+    `GET /api/diagnostics/{funnel,why-not/{symbol},milestones}`,
+    extended `/daily-report`): `signal_funnel_report()` (distinct-symbol
+    counts Universe→Candidates→Top-pool→Published→Triggered→Resolved,
+    read left-to-right for where the drop-off is largest);
+    `why_not_comparison()` (deterministic score/confidence/structure/
+    entry_quality comparison against the same cycle's next-ranked
+    candidates, never Claude-ranked); `data_milestones()` (a fixed 10/25/
+    50/100/250/500 lookup table of what becomes reasonable to test, not a
+    statistical claim); the daily report gained a 24h funnel plus average
+    score/confidence/R:R and entry-quality/momentum/structure/evidence-
+    support distributions for that day's new signals.
+  - **Frontend**: coin detail page now shows an `Entry: {quality}` badge
+    next to Grade, a "Risk / Reward — Computed, Not Guessed" section, and
+    the entry-quality evidence list — all display-only, no hard filter.
+  - **Verified live**: 30/30 new tests pass (`test_v11_data_collection.py`)
+    plus all pre-existing tests, zero regressions; new `ScanSnapshot`/
+    `TradeOutcome` columns confirmed via live scan cycles and a real
+    `/api/analyze` call (BTCUSDT/PAXGUSDT); Avoid-grade→`rejected_avoid`
+    fix verified both synthetically and against the real DB's existing
+    rows (none backfilled).
 
 ## Roadmap — what's NOT implemented yet, and why
 

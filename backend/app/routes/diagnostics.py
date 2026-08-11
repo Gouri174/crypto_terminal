@@ -118,5 +118,34 @@ async def diagnostics_ranking():
 async def diagnostics_daily_report():
     """Section 19: the daily market-regime report — designed to run once a
     day, not built as a scheduled job yet (this app has no cron/scheduler
-    infra, same reasoning as ml_retrain.py's own deferred-scheduling note)."""
+    infra, same reasoning as ml_retrain.py's own deferred-scheduling note).
+    V1.1 extended it with a 24h signal funnel and today's score/confidence/
+    R:R/entry-quality/momentum/structure/evidence-support breakdowns."""
     return fd.daily_market_regime_report(load_current_regime())
+
+
+@router.get("/diagnostics/funnel")
+async def diagnostics_funnel(days: int = 1):
+    """V1.1 section 3: Universe -> Candidates -> Top-N pool -> Published ->
+    Triggered -> Resolved, as distinct symbol counts — read left to right
+    for whether the bottleneck is too many candidates, poor ranking, poor
+    entries, or poor trade management."""
+    now_ms = int(time.time() * 1000)
+    return fd.signal_funnel_report(now_ms - days * _DAY_MS, now_ms)
+
+
+@router.get("/diagnostics/why-not/{symbol}")
+async def diagnostics_why_not(symbol: str, top_n: int = 3):
+    """V1.1 section 8: for a symbol's most recent scan, the next `top_n`
+    ranked candidates from the SAME cycle and deterministic reasons
+    (score/confidence/structure/entry_quality comparisons, never Claude)
+    for why they ranked lower."""
+    return fd.why_not_comparison(symbol, top_n=top_n)
+
+
+@router.get("/diagnostics/milestones")
+async def diagnostics_milestones():
+    """V1.1 section 15: fixed resolved-trade-count milestones (10/25/50/
+    100/250/500) and what becomes reasonable to test at each — a lookup
+    table, not a statistical-significance claim."""
+    return fd.data_milestones()

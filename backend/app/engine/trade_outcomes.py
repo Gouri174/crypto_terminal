@@ -16,12 +16,17 @@ Two entry points, both called from background_scanner.py:
     API calls).
 """
 
-from sqlalchemy import select
+from sqlalchemy import func, select
 
 from app.db import SessionLocal
+from app.engine.entry_flags import classify_market_cluster, compute_diagnostic_flags, compute_risk_reward
 from app.engine.reasoning import PROMPT_VERSION
 from app.engine.scoring import SCORE_FORMULA_VERSION
 from app.models.db_models import PredictionSnapshot, TradeOutcome
+
+# Same window forensic_diagnostics.correlation_concentration_analysis() uses
+# by default — kept identical rather than inventing a second window size.
+_CLUSTER_WINDOW_MS = 4 * 3_600_000
 
 # A trade that never enters, or never resolves, within this window is
 # closed out rather than tracked forever. 14 days comfortably covers this
@@ -49,21 +54,29 @@ _COMPONENT_KEYWORDS = {
 }
 
 
-def _capture_entry_indicators(features: dict) -> dict | None:
-    """RSI/stochRSI/ADX and distance to EMA20/EMA50/EMA200 on the 4h
-    timeframe, at the moment the plan was issued — "entry timing" raw
-    material: what did price look like relative to its recent trend right
-    before this specific trade was taken. Also expresses the EMA20
-    distance in ATR units (how many average true ranges away from the
-    fast EMA, not just a raw %) — "0.2 ATR above EMA20" and "2 ATR above
-    EMA20" are very different entries even at the same raw percentage
-    distance on a low-volatility vs high-volatility symbol.
+def _capture_entry_indicators(features: dict, regime: dict | None = None) -> dict | None:
+    """Raw entry-timing/exhaustion material on the 4h timeframe, at the
+    moment the plan was issued — what did price look like relative to its
+    recent trend right before this specific trade was taken. Also
+    expresses the EMA20 distance in ATR units (how many average true
+    ranges away from the fast EMA, not just a raw %) — "0.2 ATR above
+    EMA20" and "2 ATR above EMA20" are very different entries even at the
+    same raw percentage distance on a low- vs high-volatility symbol.
 
-    See TradeOutcome.entry_indicators for what's deliberately NOT captured
-    (distance to the most recent BOS/FVG/swing-high/swing-low) and why —
+    V1.1: extended with macd_hist/cmf/mfi/bb_pct — genuinely absent before
+    (flagged as NOT STORED throughout the forensic report) despite being
+    already computed in `ind`, just never captured here — and with
+    btc_trend/breadth from `regime`, the best available per-trade proxy
+    for "what was the wider market doing," since MarketRegimeState only
+    ever keeps the CURRENT cycle's state (see forensic_diagnostics.py's
+    correlation-analysis note on this same limitation).
+
+    See TradeOutcome.entry_indicators for what's still deliberately NOT
+    captured (distance to the most recent BOS/FVG/swing-high/swing-low) —
     compute_structure() (smart_money.py) never surfaces those price levels
     through feature_builder.py, only per-candle booleans, so that distance
-    isn't computable without a real feature-builder change."""
+    isn't computable without a real feature-builder change (unchanged in
+    this pass — that's an indicator-formula change, out of scope)."""
     ind = features.get("indicators_4h")
     if not ind:
         return None
@@ -76,6 +89,10 @@ def _capture_entry_indicators(features: dict) -> dict | None:
         "rsi14": ind.get("rsi14"),
         "stoch_rsi": ind.get("stoch_rsi"),
         "adx14": ind.get("adx14"),
+        "macd_hist": ind.get("macd_hist"),
+        "cmf": ind.get("cmf"),
+        "mfi": ind.get("mfi"),
+        "bb_pct": ind.get("bb_pct"),
         "distance_to_ema20_pct": (
             round((last_close - ema20) / ema20 * 100, 3) if last_close and ema20 else None
         ),
@@ -88,7 +105,28 @@ def _capture_entry_indicators(features: dict) -> dict | None:
         "atr_distance_to_ema20": (
             round((last_close - ema20) / atr14, 3) if last_close and ema20 and atr14 else None
         ),
+        "btc_trend": (regime or {}).get("btc_trend"),
+        "breadth_bullish_pct": (regime or {}).get("breadth_bullish_pct"),
+        "breadth_bearish_pct": (regime or {}).get("breadth_bearish_pct"),
+        "universe_size": (regime or {}).get("universe_size"),
     }
+
+
+def _count_recent_same_window_signals(session, symbol: str, now_ms: int) -> int:
+    """How many OTHER TradeOutcome rows were created within the same
+    correlation window (see forensic_diagnostics.py's default 4h) as this
+    one — a candidate for CLUSTERED_MARKET_EXPOSURE, computed once at
+    issuance rather than only retrospectively."""
+    count = session.execute(
+        select(func.count())
+        .select_from(TradeOutcome)
+        .where(
+            TradeOutcome.symbol != symbol,
+            TradeOutcome.created_at >= now_ms - _CLUSTER_WINDOW_MS,
+            TradeOutcome.created_at <= now_ms,
+        )
+    ).scalar_one()
+    return count + 1  # +1 to count this new trade itself as part of its own cluster size
 
 
 def open_trade_outcome(
@@ -140,6 +178,37 @@ def open_trade_outcome(
             old.exit_time = now_ms
 
         news_context = features.get("news_context") or {}
+        historic_probability = (
+            (history_stats["win_rate"] / 100) if history_stats and "win_rate" in history_stats else None
+        )
+        ml_probability = (ml_prediction or {}).get("win_probability")
+        entry_mid = (plan.entry_low + plan.entry_high) / 2
+        risk_reward = compute_risk_reward(
+            entry_mid, plan.stop_loss, plan.take_profit_1, plan.take_profit_2, plan.take_profit_3
+        )
+        same_window_signal_count = _count_recent_same_window_signals(session, symbol, now_ms)
+        entry_indicators = _capture_entry_indicators(features, regime)
+        if entry_indicators is not None:
+            entry_indicators["market_cluster"] = classify_market_cluster(symbol)
+            entry_indicators["risk_reward"] = risk_reward
+            entry_indicators["same_window_signal_count"] = same_window_signal_count
+        diagnostic_flags = compute_diagnostic_flags(
+            breakdown, entry_indicators, entry_quality, risk_reward,
+            ml_probability, historic_probability, same_window_signal_count,
+        )
+
+        # V1.1 safety fix: an Avoid-grade "trade" (confidence below the
+        # EXISTING trade_grade() Avoid threshold — decision.py, no new
+        # threshold invented) still gets numeric entry/stop/TP from Claude
+        # (the short schema still asks for them) and used to be tracked as
+        # a normal "pending" row indistinguishable from a real
+        # recommendation — e.g. a real BNB "Avoid / 40 confidence" case
+        # observed live. Still recorded for observability (nothing is
+        # discarded), but as "rejected_avoid," a status update_open_trades()
+        # never picks up (it only queries "pending"/"open") and every
+        # existing open-trade/pending query already excludes by construction.
+        initial_status = "rejected_avoid" if grade == "Avoid" else "pending"
+
         row = TradeOutcome(
             created_at=now_ms,
             symbol=symbol,
@@ -149,12 +218,12 @@ def open_trade_outcome(
             timeframe=plan.time_horizon,
             entry_low=plan.entry_low,
             entry_high=plan.entry_high,
-            entry=(plan.entry_low + plan.entry_high) / 2,
+            entry=entry_mid,
             stop_loss=plan.stop_loss,
             tp1=plan.take_profit_1,
             tp2=plan.take_profit_2,
             tp3=plan.take_profit_3,
-            status="pending",
+            status=initial_status,
             score=breakdown.get("total", 0.0),
             trend_score=breakdown.get("trend", 0.0),
             momentum_score=breakdown.get("momentum", 0.0),
@@ -167,10 +236,8 @@ def open_trade_outcome(
             sentiment_score=breakdown.get("sentiment", 0.0),
             liquidity_score=breakdown.get("liquidity", 0.0),
             risk_score=breakdown.get("risk", 0.0),
-            ml_probability=(ml_prediction or {}).get("win_probability"),
-            historic_probability=(
-                (history_stats["win_rate"] / 100) if history_stats and "win_rate" in history_stats else None
-            ),
+            ml_probability=ml_probability,
+            historic_probability=historic_probability,
             fear_greed=(features.get("fear_greed") or {}).get("value"),
             news_sentiment={"headlines": news_context.get("headlines", [])},
             reddit_sentiment={
@@ -185,10 +252,11 @@ def open_trade_outcome(
             score_formula_version=SCORE_FORMULA_VERSION,
             prompt_version=PROMPT_VERSION,
             ml_model_version=(ml_prediction or {}).get("model_version"),
-            entry_indicators=_capture_entry_indicators(features),
+            entry_indicators=entry_indicators,
             entry_quality=entry_quality,
             entry_quality_score=entry_quality_score,
             entry_quality_reasons=entry_quality_reasons,
+            diagnostic_flags=diagnostic_flags,
         )
         session.add(row)
         session.commit()
@@ -354,8 +422,14 @@ def _close_trade(row: TradeOutcome, exit_price: float, now_ms: int, reason: str)
     row.exit_time = now_ms
     row.holding_minutes = round((now_ms - row.entry_time) / 60_000, 1) if row.entry_time else None
     row.realized_return_pct = round((exit_price - row.entry) / row.entry * 100 * sign, 3)
+    # SCANNER_OBSERVED_STOP, not a true tick-level STOP_LEVEL_CROSSED —
+    # this app has no tick data source, so the finer distinction the
+    # forensic report asked about isn't honestly computable; this is the
+    # real, observed close price, whatever gap it shows against stop_loss.
+    row.exit_price = exit_price
 
     if reason == "stop":
+        row.stop_slippage_pct = round((exit_price - row.stop_loss) / row.stop_loss * 100 * sign, 3)
         row.status = "closed_loss"
     elif reason == "target":
         row.status = "closed_win"

@@ -100,6 +100,16 @@ export default function CoinDetailPage({
               Grade {plan.grade}
             </span>
           )}
+          {plan.entry_quality && (
+            <span
+              className={`text-xs uppercase font-semibold px-2 py-1 rounded border ${entryQualityColor(
+                plan.entry_quality
+              )}`}
+              title="Deterministic — see app/engine/entry_quality.py. A measurement variable, not a hard filter yet."
+            >
+              Entry: {plan.entry_quality}
+            </span>
+          )}
         </div>
 
         {plan.thesis && <p className="text-gray-300 italic mb-4">{plan.thesis}</p>}
@@ -115,6 +125,35 @@ export default function CoinDetailPage({
           <Field label="Take Profit 2" value={plan.take_profit_2 ?? "—"} />
           {plan.take_profit_3 != null && <Field label="Take Profit 3" value={plan.take_profit_3} />}
         </div>
+
+        {(() => {
+          const rr = computeRiskReward(plan);
+          return rr.riskPct != null ? (
+            <Section title="Risk / Reward — Computed, Not Guessed">
+              <div className="grid grid-cols-2 sm:grid-cols-4 gap-4 text-sm">
+                <Field label="Risk to Stop" value={`${rr.riskPct.toFixed(2)}%`} />
+                {rr.rrTp1 != null && <Field label="R:R to TP1" value={rr.rrTp1.toFixed(2)} />}
+                {rr.rrTp2 != null && <Field label="R:R to TP2" value={rr.rrTp2.toFixed(2)} />}
+                {rr.rrTp3 != null && <Field label="R:R to TP3" value={rr.rrTp3.toFixed(2)} />}
+              </div>
+              <p className="text-xs text-gray-600 mt-2">
+                Computed client-side from the entry/stop/TP levels above — not a change to
+                how those levels are generated, purely a display of their ratio. R:R below
+                1.0 to TP1 is not currently used to reject a trade; it is being observed only.
+              </p>
+            </Section>
+          ) : null;
+        })()}
+
+        {plan.entry_quality_reasons.length > 0 && (
+          <Section title="Entry Quality Evidence">
+            <ul className="list-disc list-inside text-gray-300 space-y-1 text-sm">
+              {plan.entry_quality_reasons.map((r, i) => (
+                <li key={i}>{r}</li>
+              ))}
+            </ul>
+          </Section>
+        )}
 
         {plan.alternative_trade && (
           <div className="mb-6 rounded border border-border bg-black/20 p-3 text-sm">
@@ -432,6 +471,39 @@ function gradeColor(grade: string): string {
   if (grade === "B+" || grade === "B") return "border-yellow-500 text-yellow-500";
   if (grade === "C") return "border-orange-500 text-orange-500";
   return "border-bear text-bear"; // "Avoid"
+}
+
+function entryQualityColor(quality: string): string {
+  if (quality === "excellent" || quality === "good") return "border-bull text-bull";
+  if (quality === "neutral") return "border-yellow-500 text-yellow-500";
+  if (quality === "late") return "border-orange-500 text-orange-500";
+  return "border-bear text-bear"; // "exhausted" | "invalid"
+}
+
+/**
+ * Pure arithmetic on the already-decided entry/stop/TP levels — mirrors
+ * app/engine/entry_flags.py:compute_risk_reward exactly, computed
+ * client-side here since TradePlan already carries every level needed.
+ * Does not change how those levels are generated, only measures them.
+ */
+function computeRiskReward(plan: import("@/lib/types").TradePlan) {
+  const entry =
+    plan.entry_low != null && plan.entry_high != null ? (plan.entry_low + plan.entry_high) / 2 : null;
+  if (entry == null || plan.stop_loss == null || entry === 0) {
+    return { riskPct: null, rrTp1: null, rrTp2: null, rrTp3: null };
+  }
+  const riskPct = (Math.abs(entry - plan.stop_loss) / entry) * 100;
+  const rr = (tp: number | null) => {
+    if (tp == null || riskPct === 0) return null;
+    const rewardPct = (Math.abs(tp - entry) / entry) * 100;
+    return rewardPct / riskPct;
+  };
+  return {
+    riskPct,
+    rrTp1: rr(plan.take_profit_1),
+    rrTp2: rr(plan.take_profit_2),
+    rrTp3: rr(plan.take_profit_3),
+  };
 }
 
 function fmtRange(lo: number | null, hi: number | null) {

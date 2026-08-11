@@ -80,6 +80,12 @@ export interface TradePlan {
   time_horizon: string;
   risk_reward: string | null;
   market_regime: string | null;
+  // Entry-timing/exhaustion classification — app/engine/entry_quality.py.
+  // Deterministic, computed before Claude runs; a hypothesis/measurement
+  // layer, not a hard filter yet.
+  entry_quality: string | null; // "excellent" | "good" | "neutral" | "late" | "exhausted" | "invalid"
+  entry_quality_score: number | null;
+  entry_quality_reasons: string[];
   reasons_for: string[];
   reasons_against: string[];
   invalidation: string | null;

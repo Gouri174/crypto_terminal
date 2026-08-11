@@ -31,7 +31,9 @@ from app.config import LLM_CANDIDATES, SCAN_INTERVAL_SECONDS, UNIVERSE_SIZE
 from app.data_sources import binance
 from app.db import SessionLocal
 from app.engine import lifecycle, market_regime, ml_model
-from app.engine.decision import decide_direction
+from app.engine.confidence import compute_confidence
+from app.engine.decision import decide_direction, trade_grade
+from app.engine.entry_flags import compute_risk_reward
 from app.engine.entry_quality import classify_entry_quality
 from app.engine.feature_builder import build_features
 from app.engine.llm_gate import should_reexplain
@@ -291,6 +293,24 @@ def _persist_scan(scored: list, now_ms: int, regime_label: str | None) -> list:
                 if entry_quality == "late":
                     needs_llm = False
 
+            # V1.1 full-candidate-pool visibility — compute_confidence()/
+            # trade_grade() are pure Python (no Claude call), so this costs
+            # nothing extra to compute for the WHOLE universe, not just
+            # published symbols. Answers "why did the system choose these 5
+            # instead of the others" without a second explain step.
+            confidence_data = compute_confidence(direction, breakdown, features, history_stats, ml_prediction)
+            candidate_confidence = confidence_data["confidence"] if direction in ("long", "short") else None
+            candidate_grade = trade_grade(candidate_confidence) if candidate_confidence is not None else None
+            candidate_ml_prob = (ml_prediction or {}).get("win_probability")
+            candidate_hist_prob = history_stats.get("win_rate") / 100 if history_stats and "win_rate" in history_stats else None
+            risk_reward_tp1 = None
+            if row and row.trade_plan:
+                tp = row.trade_plan
+                entry_low, entry_high = tp.get("entry_low"), tp.get("entry_high")
+                entry_mid = (entry_low + entry_high) / 2 if entry_low is not None and entry_high is not None else None
+                rr = compute_risk_reward(entry_mid, tp.get("stop_loss"), tp.get("take_profit_1"), None, None)
+                risk_reward_tp1 = rr["rr_tp1"]
+
             session.add(
                 ScanSnapshot(
                     timestamp=now_ms,
@@ -306,6 +326,12 @@ def _persist_scan(scored: list, now_ms: int, regime_label: str | None) -> list:
                     rejection_reason=_rejection_reason(
                         direction, rank, in_top_candidates, needs_llm, had_active_plan, entry_quality
                     ),
+                    confidence=candidate_confidence,
+                    grade=candidate_grade,
+                    entry_quality=entry_quality,
+                    ml_probability=candidate_ml_prob,
+                    historic_probability=candidate_hist_prob,
+                    risk_reward_tp1=risk_reward_tp1,
                 )
             )
 
