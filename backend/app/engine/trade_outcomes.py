@@ -112,6 +112,53 @@ def _capture_entry_indicators(features: dict, regime: dict | None = None) -> dic
     }
 
 
+_ORDER_BLOCK_NOTE = (
+    "Not detected — this codebase's smart_money.py implements swing "
+    "points, break-of-structure, change-of-character, and fair value gaps "
+    "only; there is no order-block detection anywhere to report a price "
+    "from, so this is reported as unavailable rather than guessed."
+)
+
+
+def _capture_level_reasoning(plan, features: dict, direction: str) -> dict | None:
+    """The "how did Claude arrive at each level" capture the user asked
+    for, going forward only — never backfilled for historical rows. Pulls
+    Claude's own per-level reasoning strings straight off the plan (see
+    TradePlan.entry_reasoning etc. / reasoning.py's JSON_INSTRUCTIONS_*),
+    plus the actual structure levels this engine's own detection was
+    tracking at issuance (smart_money.py, exposed through feature_builder
+    as of this pass — see structure_4h.nearest_swing_high/low and
+    fvg_up/down_* in feature_builder.py). "Structure level used" is
+    direction-oriented (the resistance a long is measured against, the
+    support a short is measured against); nearest_support/resistance are
+    the same two levels without that orientation."""
+    ind = features.get("indicators_4h") or {}
+    structure = features.get("structure_4h") or {}
+    atr14 = ind.get("atr14")
+    swing_high = structure.get("nearest_swing_high")
+    swing_low = structure.get("nearest_swing_low")
+
+    fvg_used = None
+    if structure.get("fvg_up"):
+        fvg_used = {"direction": "up", "bottom": structure.get("fvg_up_bottom"), "top": structure.get("fvg_up_top")}
+    elif structure.get("fvg_down"):
+        fvg_used = {"direction": "down", "top": structure.get("fvg_down_top"), "bottom": structure.get("fvg_down_bottom")}
+
+    return {
+        "entry_reasoning": getattr(plan, "entry_reasoning", None),
+        "sl_reasoning": getattr(plan, "sl_reasoning", None),
+        "tp1_reasoning": getattr(plan, "tp1_reasoning", None),
+        "tp2_reasoning": getattr(plan, "tp2_reasoning", None),
+        "tp3_reasoning": getattr(plan, "tp3_reasoning", None),
+        "atr_at_entry": atr14,
+        "structure_level_used": swing_high if direction == "long" else swing_low,
+        "nearest_support": swing_low,
+        "nearest_resistance": swing_high,
+        "fvg_used": fvg_used,
+        "order_block_note": _ORDER_BLOCK_NOTE,
+    }
+
+
 def _count_recent_same_window_signals(session, symbol: str, now_ms: int) -> int:
     """How many OTHER TradeOutcome rows were created within the same
     correlation window (see forensic_diagnostics.py's default 4h) as this
@@ -183,8 +230,10 @@ def open_trade_outcome(
         )
         ml_probability = (ml_prediction or {}).get("win_probability")
         entry_mid = (plan.entry_low + plan.entry_high) / 2
+        atr14_at_entry = (features.get("indicators_4h") or {}).get("atr14")
         risk_reward = compute_risk_reward(
-            entry_mid, plan.stop_loss, plan.take_profit_1, plan.take_profit_2, plan.take_profit_3
+            entry_mid, plan.stop_loss, plan.take_profit_1, plan.take_profit_2, plan.take_profit_3,
+            atr14=atr14_at_entry,
         )
         same_window_signal_count = _count_recent_same_window_signals(session, symbol, now_ms)
         entry_indicators = _capture_entry_indicators(features, regime)
@@ -257,6 +306,7 @@ def open_trade_outcome(
             entry_quality_score=entry_quality_score,
             entry_quality_reasons=entry_quality_reasons,
             diagnostic_flags=diagnostic_flags,
+            level_reasoning=_capture_level_reasoning(plan, features, plan.recommendation),
         )
         session.add(row)
         session.commit()

@@ -275,6 +275,28 @@ class TradeOutcome(Base):
     # this pass; a measurement variable only, same as entry_quality above.
     diagnostic_flags: Mapped[list | None] = mapped_column(JSON, nullable=True)
 
+    # "Stop letting Claude be the only source of truth for risk levels" —
+    # per-trade capture of HOW Claude arrived at each level, not just the
+    # final number. NULL for every trade before this shipped (not
+    # backfilled — see app/engine/trade_outcomes.py:_capture_level_reasoning
+    # and the project's explicit decision not to retroactively fabricate
+    # this for historical rows). Shape: {"entry_reasoning", "sl_reasoning",
+    # "tp1_reasoning", "tp2_reasoning", "tp3_reasoning" (Claude's own text,
+    # one sentence each, whichever level exists), "atr_at_entry" (4h ATR
+    # at issuance), "structure_level_used" (the nearest swing high/low this
+    # engine's structure detection was tracking, oriented toward the trade
+    # direction — i.e. the resistance a long is measured against or the
+    # support a short is measured against), "nearest_support",
+    # "nearest_resistance" (the same two swing levels, direction-agnostic),
+    # "fvg_used" (the FVG price range active on the entry candle, if any —
+    # null if none was open), "order_block_note" (always a fixed string:
+    # this codebase's smart_money.py has no order-block detection at all,
+    # only swings/BOS/CHOCH/FVG — reported honestly rather than faking a
+    # value for a concept that isn't implemented). Distances in % and ATR
+    # units live in entry_indicators["risk_reward"] instead of being
+    # duplicated here.
+    level_reasoning: Mapped[dict | None] = mapped_column(JSON, nullable=True)
+
 
 class PredictionSnapshot(Base):
     """One deterministic validation check of an OPEN TradeOutcome, recorded

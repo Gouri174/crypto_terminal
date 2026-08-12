@@ -29,14 +29,24 @@ def classify_market_cluster(symbol: str) -> str:
 def compute_risk_reward(
     entry: float | None, stop_loss: float | None,
     tp1: float | None, tp2: float | None, tp3: float | None,
+    atr14: float | None = None,
 ) -> dict:
     """Pure arithmetic on already-decided entry/stop/TP levels — does NOT
     change how those levels are generated, only measures them. NULL
-    wherever a level is missing, never estimated."""
+    wherever a level is missing, never estimated.
+
+    atr14 (optional, 4h ATR at issuance) additionally expresses each
+    level's distance in ATR units, not just raw %: "SL is 1.5 ATR away"
+    is comparable across symbols at wildly different volatility, where
+    "SL is 3% away" isn't. Observation only — this does not tell Claude
+    where to place a level, only measures where it placed one, feeding
+    the organic "Claude usually puts TP1 around N ATR away" dataset."""
     if entry is None or stop_loss is None or entry == 0:
         return {
             "risk_to_sl_pct": None, "reward_to_tp1_pct": None, "reward_to_tp2_pct": None,
             "reward_to_tp3_pct": None, "rr_tp1": None, "rr_tp2": None, "rr_tp3": None,
+            "entry_to_sl_atr": None, "entry_to_tp1_atr": None,
+            "entry_to_tp2_atr": None, "entry_to_tp3_atr": None,
         }
     risk_pct = abs(entry - stop_loss) / entry * 100
 
@@ -46,6 +56,11 @@ def compute_risk_reward(
     def _rr(reward: float | None) -> float | None:
         return round(reward / risk_pct, 3) if reward is not None and risk_pct else None
 
+    def _atr_distance(level: float | None) -> float | None:
+        if level is None or not atr14:
+            return None
+        return round(abs(level - entry) / atr14, 3)
+
     r1, r2, r3 = _reward(tp1), _reward(tp2), _reward(tp3)
     return {
         "risk_to_sl_pct": round(risk_pct, 3),
@@ -53,6 +68,10 @@ def compute_risk_reward(
         "reward_to_tp2_pct": round(r2, 3) if r2 is not None else None,
         "reward_to_tp3_pct": round(r3, 3) if r3 is not None else None,
         "rr_tp1": _rr(r1), "rr_tp2": _rr(r2), "rr_tp3": _rr(r3),
+        "entry_to_sl_atr": _atr_distance(stop_loss),
+        "entry_to_tp1_atr": _atr_distance(tp1),
+        "entry_to_tp2_atr": _atr_distance(tp2),
+        "entry_to_tp3_atr": _atr_distance(tp3),
     }
 
 

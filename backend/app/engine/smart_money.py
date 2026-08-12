@@ -55,10 +55,22 @@ def compute_structure(df: pd.DataFrame, lookback: int = 2) -> pd.DataFrame:
     break against it is a Change of Character (possible reversal).
 
     Returns a DataFrame aligned to `df.index` with columns:
-    trend, bos_up, bos_down, choch, fvg_up, fvg_down
+    trend, bos_up, bos_down, choch, fvg_up, fvg_down, nearest_swing_high,
+    nearest_swing_low, fvg_up_bottom, fvg_up_top, fvg_down_top, fvg_down_bottom
+
+    The nearest_swing_high/low and fvg_*_top/bottom columns are the exact
+    price values this function was already computing internally to decide
+    bos_up/bos_down/choch/fvg_up/fvg_down — surfaced here as their own
+    columns rather than discarded, so a caller can capture the actual
+    structure level or FVG range a trade was measured against, not just
+    the boolean flag. No detection logic changes: same swings, same BOS/
+    CHOCH/FVG rules as before, this only stops throwing away values that
+    were already sitting in the loop.
     """
     swing_high, swing_low = find_swing_points(df, lookback)
     fvg_up, fvg_down = find_fair_value_gaps(df)
+    highs = df["high"].to_numpy()
+    lows = df["low"].to_numpy()
     closes = df["close"].to_numpy()
     n = len(df)
 
@@ -66,6 +78,12 @@ def compute_structure(df: pd.DataFrame, lookback: int = 2) -> pd.DataFrame:
     bos_up = [False] * n
     bos_down = [False] * n
     choch = [False] * n
+    nearest_swing_high = [None] * n
+    nearest_swing_low = [None] * n
+    fvg_up_bottom = [None] * n
+    fvg_up_top = [None] * n
+    fvg_down_top = [None] * n
+    fvg_down_bottom = [None] * n
 
     last_swing_high = None
     last_swing_low = None
@@ -95,6 +113,16 @@ def compute_structure(df: pd.DataFrame, lookback: int = 2) -> pd.DataFrame:
             last_swing_low = None
 
         trend[i] = current_trend
+        nearest_swing_high[i] = last_swing_high
+        nearest_swing_low[i] = last_swing_low
+
+        if i >= 2:
+            if fvg_up.iloc[i]:
+                fvg_up_bottom[i] = highs[i - 2]
+                fvg_up_top[i] = lows[i]
+            if fvg_down.iloc[i]:
+                fvg_down_top[i] = lows[i - 2]
+                fvg_down_bottom[i] = highs[i]
 
     return pd.DataFrame(
         {
@@ -104,6 +132,12 @@ def compute_structure(df: pd.DataFrame, lookback: int = 2) -> pd.DataFrame:
             "choch": choch,
             "fvg_up": fvg_up,
             "fvg_down": fvg_down,
+            "nearest_swing_high": nearest_swing_high,
+            "nearest_swing_low": nearest_swing_low,
+            "fvg_up_bottom": fvg_up_bottom,
+            "fvg_up_top": fvg_up_top,
+            "fvg_down_top": fvg_down_top,
+            "fvg_down_bottom": fvg_down_bottom,
         },
         index=df.index,
     )

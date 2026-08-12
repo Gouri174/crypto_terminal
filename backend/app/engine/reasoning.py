@@ -118,6 +118,14 @@ this trade" — specific and actionable, not generic hedging.
 Always populate the `disclaimer` field with a plain-English reminder that
 this is not financial advice and no outcome is guaranteed.
 
+For every numeric level you set (entry, stop_loss, take_profit_1/2/3), also
+give a short reason for THAT SPECIFIC NUMBER in the matching *_reasoning
+field — not why the trade overall, but why the stop is at that exact price
+and why each target is where it is (e.g. "beyond the nearest swing high at
+X", "just past the 4h FVG bottom", "1.5x ATR from entry", "prior resistance
+turned support"). One sentence each. If a level is null, its reasoning
+field should be null too.
+
 Adaptive length: `precomputed_grade` tells you which schema to fill in —
 you'll be given either the full analyst-report shape or a short one. On
 the short schema (low-grade setups), be brief on purpose: 1-2 items per
@@ -137,10 +145,15 @@ engine and added by the caller, not written by you:
 {
   "entry_low": number or null,
   "entry_high": number or null,
+  "entry_reasoning": string or null (why THIS entry zone specifically),
   "stop_loss": number or null (with reasoning captured in "invalidation"),
+  "sl_reasoning": string or null (why THIS stop price specifically — what level/distance it's set against),
   "take_profit_1": number or null,
+  "tp1_reasoning": string or null (why THIS TP1 price specifically),
   "take_profit_2": number or null,
+  "tp2_reasoning": string or null (why THIS TP2 price specifically),
   "take_profit_3": number or null (a stretch target beyond TP2, only if the setup clearly supports one — null is fine and common),
+  "tp3_reasoning": string or null (why THIS TP3 price specifically, null if take_profit_3 is null),
   "risk_level": "low" | "medium" | "high",
   "time_horizon": "scalp" | "intraday" | "swing" | "position",
   "risk_reward": string or null,
@@ -174,10 +187,15 @@ or "entry_quality_reasons":
 {
   "entry_low": number or null,
   "entry_high": number or null,
+  "entry_reasoning": string or null (one short phrase — why this zone),
   "stop_loss": number or null,
+  "sl_reasoning": string or null (one short phrase — why this stop price),
   "take_profit_1": number or null,
+  "tp1_reasoning": string or null (one short phrase),
   "take_profit_2": number or null,
+  "tp2_reasoning": string or null (one short phrase),
   "take_profit_3": number or null,
+  "tp3_reasoning": string or null (one short phrase, null if take_profit_3 is null),
   "risk_level": "low" | "medium" | "high",
   "time_horizon": "scalp" | "intraday" | "swing" | "position",
   "reasons_for": [string, ...] (1-2 items, brief),

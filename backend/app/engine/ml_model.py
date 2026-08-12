@@ -37,7 +37,7 @@ from pathlib import Path
 
 import numpy as np
 import xgboost as xgb
-from sklearn.metrics import roc_auc_score
+from sklearn.metrics import brier_score_loss, log_loss, roc_auc_score
 from sqlalchemy import select
 
 from app.db import SessionLocal
@@ -193,11 +193,53 @@ def train_models(min_samples: int = 200) -> dict:
         "drawdown_model_test_accuracy": acc(drawdown_model, X_test, yd_test),
         "drawdown_model_test_auc": auc(drawdown_model, X_test, yd_test),
         "drawdown_base_rate": round(float(y_drawdown.mean()), 3),
+        "win_model_test_calibration": evaluate_calibration(win_model, X_test, yw_test),
+        "drawdown_model_test_calibration": evaluate_calibration(drawdown_model, X_test, yd_test),
         "note": (
             "test_auc near 0.5 means this model isn't adding real signal "
             "over the deterministic score — check this after every retrain."
         ),
+        # Not saved to metadata.json (see ml_retrain.py) — returned so a
+        # caller can evaluate ANOTHER model (e.g. the previously-deployed
+        # one, before this call overwrote it) against the EXACT SAME
+        # held-out chronological split, for a true apples-to-apples
+        # comparison rather than comparing against an old model's own
+        # metrics from a different, earlier test period.
+        "_X_test": X_test, "_y_win_test": yw_test, "_y_drawdown_test": yd_test,
     }
+
+
+_CALIBRATION_BUCKETS = [(0.0, 0.2), (0.2, 0.4), (0.4, 0.6), (0.6, 0.8), (0.8, 1.01)]
+
+
+def evaluate_calibration(model, X_: np.ndarray, y_: np.ndarray, min_bucket_n: int = 5) -> dict | None:
+    """Brier score, log loss, and actual-hit-rate-by-predicted-probability
+    bucket on a held-out set — the test that actually matters for a
+    probability model: if it says 80-90%, does ~80-90% of that actually
+    happen out-of-sample? AUC/accuracy alone can't answer that. Buckets
+    with fewer than min_bucket_n test rows report null with their n rather
+    than a misleading rate."""
+    if len(X_) == 0 or len(set(y_.tolist())) < 2:
+        return None
+    probs = model.predict_proba(X_)[:, 1]
+    brier = round(float(brier_score_loss(y_, probs)), 4)
+    try:
+        logloss = round(float(log_loss(y_, probs, labels=[0, 1])), 4)
+    except ValueError:
+        logloss = None
+
+    buckets = []
+    for lo, hi in _CALIBRATION_BUCKETS:
+        mask = (probs >= lo) & (probs < hi)
+        n = int(mask.sum())
+        entry = {"predicted_range": f"{lo:.1f}-{min(hi, 1.0):.1f}", "n": n}
+        if n < min_bucket_n:
+            entry["note"] = f"Insufficient — need >= {min_bucket_n}, have {n}."
+        else:
+            entry["actual_hit_rate"] = round(float(y_[mask].mean()), 3)
+        buckets.append(entry)
+
+    return {"brier_score": brier, "log_loss": logloss, "buckets": buckets}
 
 
 def _load_models() -> bool:

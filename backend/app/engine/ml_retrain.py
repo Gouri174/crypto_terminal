@@ -21,6 +21,8 @@ import json
 import time
 from pathlib import Path
 
+import xgboost as xgb
+from sklearn.metrics import roc_auc_score
 from sqlalchemy import func, select
 
 from app.db import SessionLocal
@@ -115,6 +117,72 @@ def retrain_if_better(min_samples: int = 200, tolerance: float = 0.0) -> dict:
 
     _save_metadata(result)
     return {**result, "deployed": True, "previous_win_model_test_auc": deployed_auc}
+
+
+def retrain_and_compare(min_samples: int = 200) -> dict:
+    """The out-of-sample old-vs-new revalidation the user explicitly asked
+    for, separate from retrain_if_better()'s AUC-only gate: trains a fresh
+    candidate on the CURRENT 25k-row MarketSnapshot table (chronological
+    split, same as always), then evaluates the PREVIOUSLY-deployed model —
+    loaded from the pre-overwrite backup — on that exact same held-out
+    test split, so both models are scored on identical data instead of
+    being compared across two different eras of held-out data. Reports
+    AUC/Brier/log-loss/calibration for both, plus the base rate, so "does
+    the new model genuinely beat the old one" can be judged rather than
+    assumed. Deploys the candidate only if it's at least as good on AUC —
+    reusing retrain_if_better()'s exact deploy/rollback mechanics — so this
+    is safe to call the same way."""
+    have_existing_model = ml_model.WIN_MODEL_PATH.exists() and ml_model.DRAWDOWN_MODEL_PATH.exists()
+    old_win_model = None
+    old_drawdown_model = None
+    if have_existing_model:
+        old_win_model = xgb.XGBClassifier()
+        old_win_model.load_model(str(ml_model.WIN_MODEL_PATH))
+        old_drawdown_model = xgb.XGBClassifier()
+        old_drawdown_model.load_model(str(ml_model.DRAWDOWN_MODEL_PATH))
+
+    result = retrain_if_better(min_samples=min_samples)
+    if not result.get("trained"):
+        return result
+
+    X_test = result.pop("_X_test")
+    yw_test = result.pop("_y_win_test")
+    yd_test = result.pop("_y_drawdown_test")
+
+    old_evaluation = None
+    if old_win_model is not None:
+        old_evaluation = {
+            "win_model_test_auc": _safe_auc(old_win_model, X_test, yw_test),
+            "win_model_test_calibration": ml_model.evaluate_calibration(old_win_model, X_test, yw_test),
+            "drawdown_model_test_auc": _safe_auc(old_drawdown_model, X_test, yd_test),
+            "drawdown_model_test_calibration": ml_model.evaluate_calibration(
+                old_drawdown_model, X_test, yd_test
+            ),
+            "note": (
+                "Evaluated on the CANDIDATE's held-out chronological test split "
+                "(same rows the new model was scored on), not the split the old "
+                "model was originally trained/tested against — this is what makes "
+                "the comparison apples-to-apples."
+            ),
+        }
+
+    new_beats_old = None
+    if old_evaluation is not None and old_evaluation["win_model_test_auc"] is not None:
+        new_beats_old = (result.get("win_model_test_auc") or 0) >= old_evaluation["win_model_test_auc"]
+
+    return {
+        **result,
+        "old_model_evaluated_on_same_test_split": old_evaluation,
+        "new_model_genuinely_beats_old_model": new_beats_old,
+        "baseline_win_rate": result.get("win_base_rate"),
+        "baseline_drawdown_rate": result.get("drawdown_base_rate"),
+    }
+
+
+def _safe_auc(model, X_, y_) -> float | None:
+    if len(X_) == 0 or len(set(y_.tolist())) < 2:
+        return None
+    return round(float(roc_auc_score(y_, model.predict_proba(X_)[:, 1])), 3)
 
 
 def retrain_recommendation(

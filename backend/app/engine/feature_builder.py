@@ -1,5 +1,7 @@
 import asyncio
 
+import pandas as pd
+
 from app.data_sources import binance
 from app.data_sources.fear_greed import get_cached_fear_greed
 from app.engine.cross_exchange import get_cross_exchange_context
@@ -42,6 +44,27 @@ async def build_features(symbol: str) -> dict:
             "choch": bool(last["choch"]),
             "fvg_up": bool(last["fvg_up"]),
             "fvg_down": bool(last["fvg_down"]),
+            # Actual price levels behind the booleans above — the nearest
+            # unbroken swing high/low (this framework's stand-in for
+            # support/resistance) as of the last candle, and this candle's
+            # FVG range if one was just formed. None if no such level is
+            # currently tracked. No order-block detection exists anywhere
+            # in this codebase (smart_money.py only implements swings/BOS/
+            # CHOCH/FVG) — there is no order-block price to expose here.
+            # compute_structure()'s DataFrame stores these as float64 columns
+            # (pandas coerces a None/float-mixed list on construction), so a
+            # missing level comes back as NaN, not None — pd.notna() is the
+            # correct check here, not `is not None`, which NaN always fails.
+            "nearest_swing_high": (
+                float(last["nearest_swing_high"]) if pd.notna(last["nearest_swing_high"]) else None
+            ),
+            "nearest_swing_low": (
+                float(last["nearest_swing_low"]) if pd.notna(last["nearest_swing_low"]) else None
+            ),
+            "fvg_up_bottom": float(last["fvg_up_bottom"]) if pd.notna(last["fvg_up_bottom"]) else None,
+            "fvg_up_top": float(last["fvg_up_top"]) if pd.notna(last["fvg_up_top"]) else None,
+            "fvg_down_top": float(last["fvg_down_top"]) if pd.notna(last["fvg_down_top"]) else None,
+            "fvg_down_bottom": float(last["fvg_down_bottom"]) if pd.notna(last["fvg_down_bottom"]) else None,
         }
 
     binance_price = None

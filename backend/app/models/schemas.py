@@ -133,6 +133,16 @@ class TradePlan(BaseModel):
     take_profit_1: float | None = None
     take_profit_2: float | None = None
     take_profit_3: float | None = None
+    # Why THIS specific number, not just why the trade — captured so a
+    # future analysis can discover Claude's real level-placement pattern
+    # (e.g. "TP1 usually ~1.1 ATR away when structure X is present") from
+    # observation rather than assumption. Explanation only: Claude still
+    # doesn't choose these numbers any differently than before.
+    entry_reasoning: str | None = None
+    sl_reasoning: str | None = None
+    tp1_reasoning: str | None = None
+    tp2_reasoning: str | None = None
+    tp3_reasoning: str | None = None
     risk_level: str  # "low" | "medium" | "high"
     time_horizon: str  # "scalp" | "intraday" | "swing" | "position"
     risk_reward: str | None = None
