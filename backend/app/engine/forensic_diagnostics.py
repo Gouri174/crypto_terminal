@@ -163,6 +163,75 @@ def trade_autopsies() -> list[dict]:
 
 
 # ---------------------------------------------------------------------------
+# Multi-target Phase 1: conditional target probabilities (read-only,
+# computed from real TradeOutcome data — no model, no Claude, nothing
+# fabricated). P(TP2) and P(TP2 | TP1 reached) are DIFFERENT questions;
+# this reports the conditional, which is what matters for a decision made
+# AFTER TP1 already happened.
+# ---------------------------------------------------------------------------
+
+def target_conditional_probabilities(min_sample: int = 5) -> dict:
+    rows = _resolved_rows()
+    entered = [r for r in rows if r.entry_hit]
+    n_entered = len(entered)
+
+    reached_tp1 = [r for r in entered if r.tp1_hit]
+    reached_tp2 = [r for r in entered if r.tp2_hit]
+    reached_tp3 = [r for r in entered if r.tp3_hit]
+
+    def _rate(count: int, denom: int) -> dict:
+        if denom < min_sample:
+            return {"probability_pct": None, "n": denom, "note": f"INSUFFICIENT DATA — need >= {min_sample}, have {denom}."}
+        return {"probability_pct": round(count / denom * 100, 1), "n": denom}
+
+    def _return_after(level_attr: str, rows_that_reached: list) -> list[float]:
+        # Return measured FROM the target level itself to the actual exit,
+        # not from original entry — a genuinely different number from the
+        # trade's overall realized_return_pct. Only trades with a stored
+        # exit_price (V1.1+) can compute this; older trades honestly excluded.
+        rets = []
+        for r in rows_that_reached:
+            level = getattr(r, level_attr)
+            if level is None or r.exit_price is None:
+                continue
+            sign = 1 if r.direction == "long" else -1
+            rets.append(round((r.exit_price - level) / level * 100 * sign, 3))
+        return rets
+
+    def _return_summary(rets: list[float]) -> dict:
+        if len(rets) < min_sample:
+            return {"average_pct": None, "n": len(rets), "note": f"INSUFFICIENT DATA (needs stored exit_price, only V1.1+ trades have it) — need >= {min_sample}, have {len(rets)}."}
+        return {"average_pct": round(statistics.mean(rets), 3), "n": len(rets)}
+
+    def _reversal_rate(rows_that_reached: list) -> dict:
+        denom = len(rows_that_reached)
+        if denom < min_sample:
+            return {"probability_pct": None, "n": denom, "note": f"INSUFFICIENT DATA — need >= {min_sample}, have {denom}."}
+        reversed_count = sum(1 for r in rows_that_reached if r.stop_hit)
+        return {"probability_pct": round(reversed_count / denom * 100, 1), "n": denom}
+
+    return {
+        "p_tp1": _rate(len(reached_tp1), n_entered),
+        "p_tp2_given_tp1_reached": _rate(len(reached_tp2), len(reached_tp1)),
+        "p_tp3_given_tp2_reached": _rate(len(reached_tp3), len(reached_tp2)),
+        "average_return_after_tp1": _return_summary(_return_after("tp1", reached_tp1)),
+        "average_return_after_tp2": _return_summary(_return_after("tp2", reached_tp2)),
+        "probability_of_reversal_after_tp1": _reversal_rate(reached_tp1),
+        "probability_of_reversal_after_tp2": _reversal_rate(reached_tp2),
+        "note": (
+            "P(TP2) overall and P(TP2 | TP1 reached) are DIFFERENT questions "
+            "— this reports the conditional, which is what matters for a "
+            "decision made AFTER TP1 already happened. Every rate is gated "
+            "behind min_sample and reports INSUFFICIENT DATA rather than a "
+            "misleading percentage from a handful of trades. These are "
+            "descriptive statistics on real outcomes, not model output — "
+            "Phase 2 is what would turn this into a validated predictive "
+            "probability."
+        ),
+    }
+
+
+# ---------------------------------------------------------------------------
 # 2. TP/SL path analysis
 # ---------------------------------------------------------------------------
 

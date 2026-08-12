@@ -801,6 +801,70 @@ computed score, not parsed from what Claude claims it is.
     `/api/analyze` call (BTCUSDT/PAXGUSDT); Avoid-grade→`rejected_avoid`
     fix verified both synthetically and against the real DB's existing
     rows (none backfilled).
+- **Multi-target prediction — Phase 1 only** (data model + read-only
+  conditional-probability analysis; Phases 2-5 — a validated target-
+  specific model, live shadow-mode predictions, the dashboard, and the
+  80% continuation rule — are explicitly NOT built yet). Motivated by the
+  15/18-trade forensic review's own framing: a trade isn't one prediction,
+  TP1/TP2/TP3 are three different ones, and treating "win/loss" as a
+  single binary throws away real information (a trade that reaches TP1
+  then stops is not the same fact as one that never gets close).
+  - **No new columns duplicate what already existed**: `tp1_hit`/`tp2_hit`/
+    `tp3_hit` and `tp1_hit_at`/`tp2_hit_at`/`tp3_hit_at` on `TradeOutcome`
+    already ARE the target-reached facts and timestamps this redesign
+    asked for — confirmed and reused, not renamed or rebuilt.
+  - **`PredictionSnapshot` extended** (`app/models/db_models.py`): `stage`
+    (`PRE_ENTRY`|`OPEN`|`TP1_REACHED`|`TP2_REACHED`|`TP3_REACHED`|`EXITED`,
+    derived purely from `status`+`tp1_hit`/`tp2_hit`/`tp3_hit` — computed
+    in `trade_outcomes.py:_compute_stage()`), `tp1_probability`/
+    `tp2_probability`/`tp3_probability` (all **NULL in Phase 1** — no model
+    exists yet, never fabricated), `current_score`/`momentum_score`/
+    `structure_score`/`entry_quality` (at-issuance values carried forward,
+    same pattern already used for `confidence`/`grade` — NOT a live
+    rescore, that's Phase 3 scope), running `mfe_pct`/`mae_pct` at
+    snapshot time (distinct from `TradeOutcome`'s final values, which only
+    lock in at close — this is what will let a future analysis answer "did
+    the system recognize deterioration before the trade actually
+    stopped"), `distance_to_tp3_pct`, `management_decision` +
+    `decision_reason` (`app/engine/trade_outcomes.py:_compute_management_decision` —
+    deliberately boring in Phase 1: always `HOLD` while open, with a
+    `decision_reason` that explicitly says "no target-probability model
+    active yet" rather than implying a real decision was made; only
+    `TAKE_PROFIT`/`STOPPED`/`INVALIDATED` on exit, mapped from the
+    existing close reason).
+  - **`target_conditional_probabilities()`** (`app/engine/forensic_diagnostics.py`,
+    `GET /api/diagnostics/target-probabilities`): read-only, computed from
+    real `TradeOutcome` data. Explicitly separates P(TP2) from
+    P(TP2 | TP1 reached) — different questions, and the conditional is
+    what matters for a decision made after TP1 already happened. Gated
+    behind `min_sample`, reports `INSUFFICIENT DATA` rather than a
+    misleading percentage. **Verified live on the real 18-trade DB**:
+    P(TP1) = 22.2% (n=18), but **P(TP2 | TP1 reached) = 75.0% (n=4)** — a
+    genuinely different and more useful number than the aggregate 16.7%
+    TP2 rate, exactly validating the premise. `average_return_after_tp1`/
+    `_tp2` correctly report `INSUFFICIENT DATA` (need a stored
+    `exit_price`, a V1.1-era field — no trade yet has both `tp1_hit` and a
+    post-V1.1 `exit_price`, honestly excluded rather than guessed).
+  - **Phase 2 feasibility investigated, not built**: `MarketSnapshot` has
+    25,080 rows with `forward_return_pct` populated, but only across **6
+    symbols** (BTC/ETH/SOL/BNB/ADA/XRP) — far narrower than the live
+    ~40-symbol scanned universe — and `forward_return_pct`/
+    `forward_max_drawdown_pct` are single-horizon SCALARS, not
+    path-dependent labels; they cannot directly answer "did this snapshot
+    reach a TP1-equivalent level before a stop-equivalent level."
+    `ohlcv_candles` has the real OHLC path needed (26,280 rows, ~2 years
+    per symbol) to construct proper TP1/TP2/TP3 labels, but doing so
+    requires DEFINING a synthetic target/stop distance for historical
+    snapshots — real trades use Claude-chosen levels that don't exist for
+    an arbitrary past candle — which is a real design decision, not
+    something to decide unilaterally. Not built this pass; needs your
+    input on the labeling methodology before Phase 2 starts.
+  - **Verified**: 20/20 new tests (`test_multi_target_phase1.py`) plus all
+    pre-existing tests pass, zero regressions. **Zero lines changed** in
+    `scoring.py`, `confidence.py`, `decision.py`, `lifecycle.py`,
+    `ml_model.py`, `market_regime.py`, `reasoning.py`, or
+    `background_scanner.py` — verified via `git diff --stat` before
+    committing. No new Claude calls.
 
 ## Roadmap — what's NOT implemented yet, and why
 

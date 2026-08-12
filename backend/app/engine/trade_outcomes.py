@@ -295,6 +295,55 @@ def update_open_trades(prices: dict[str, float], now_ms: int, regime_label: str 
         session.close()
 
 
+_TERMINAL_STATUSES = ("closed_win", "closed_loss", "closed_stale", "invalidated")
+
+
+def _compute_stage(row: TradeOutcome) -> str:
+    """PRE_ENTRY | OPEN | TP1_REACHED | TP2_REACHED | TP3_REACHED | EXITED —
+    derived purely from status + tp1_hit/tp2_hit/tp3_hit, which are
+    themselves only ever set once real price crosses a real threshold
+    (_update_one). No probability, no Claude, no new state machine."""
+    if row.status in _TERMINAL_STATUSES:
+        return "EXITED"
+    if row.status == "pending":
+        return "PRE_ENTRY"
+    if row.tp3_hit:
+        return "TP3_REACHED"
+    if row.tp2_hit:
+        return "TP2_REACHED"
+    if row.tp1_hit:
+        return "TP1_REACHED"
+    return "OPEN"
+
+
+def _compute_management_decision(row: TradeOutcome, stage: str) -> tuple[str, str]:
+    """Phase 1 ONLY: a deterministic mapping from stage/status — there is
+    no target-probability model yet (tp1/2/3_probability are NULL until
+    Phase 2 ships), so this never recommends CONTINUE/TAKE_PROFIT/
+    REDUCE_RISK on probability grounds and the 80% continuation rule is
+    NOT active. Every reason string says so explicitly rather than
+    implying a real decision was made. This is intentionally boring —
+    real continuous reassessment (Phase 3) and the continuation rule
+    (Phase 5) are separate, later work, not built here."""
+    if stage == "PRE_ENTRY":
+        return "HOLD", "Waiting for price to enter the proposed zone."
+    if stage == "EXITED":
+        if row.status == "closed_win":
+            return "TAKE_PROFIT", "Reached the outermost defined target this cycle."
+        if row.status == "closed_loss":
+            return "STOPPED", "Stop hit this cycle."
+        if row.status == "closed_stale":
+            return "INVALIDATED", "Never entered within the max holding window."
+        return "INVALIDATED", "Superseded by a new plan before resolving."
+    if stage == "OPEN":
+        return "HOLD", "Position open, TP1 not yet reached. No target-probability model active yet (Phase 2 not built) — no automatic continuation/exit decision is made on probability grounds."
+    if stage == "TP1_REACHED":
+        return "HOLD", "TP1 reached. TP2 continuation is decided by the existing outermost-target close logic (unchanged) — the 80% continuation rule is NOT active (Phase 5 not started)."
+    if stage == "TP2_REACHED":
+        return "HOLD", "TP2 reached. TP3 continuation is decided by the existing outermost-target close logic (unchanged) — the 80% continuation rule is NOT active (Phase 5 not started)."
+    return "HOLD", f"Unhandled stage {stage!r} — defaulting to HOLD rather than guessing."
+
+
 def record_snapshot(
     session, row: TradeOutcome, price: float, now_ms: int, regime_label: str | None
 ) -> None:
@@ -315,6 +364,23 @@ def record_snapshot(
             return None
         return round((level - price) / price * 100 * sign, 3)
 
+    # Running MFE/MAE AT THIS SNAPSHOT, from the same max_favorable_price/
+    # max_adverse_price _update_one() already tracks — distinct from
+    # TradeOutcome.max_runup_pct/max_drawdown_pct, which are only finalized
+    # at close. Lets a later analysis check whether the deterministic state
+    # showed deterioration before the trade actually stopped.
+    mfe_pct = (
+        round((row.max_favorable_price - row.entry) / row.entry * 100 * sign, 3)
+        if row.max_favorable_price is not None else None
+    )
+    mae_pct = (
+        round((row.max_adverse_price - row.entry) / row.entry * 100 * sign, 3)
+        if row.max_adverse_price is not None else None
+    )
+
+    stage = _compute_stage(row)
+    management_decision, decision_reason = _compute_management_decision(row, stage)
+
     session.add(
         PredictionSnapshot(
             trade_outcome_id=row.id,
@@ -324,12 +390,30 @@ def record_snapshot(
             current_pnl_pct=pnl_pct,
             distance_to_tp1_pct=_distance(row.tp1),
             distance_to_tp2_pct=_distance(row.tp2),
+            distance_to_tp3_pct=_distance(row.tp3),
             distance_to_stop_pct=round((row.stop_loss - price) / price * 100 * sign, 3),
             confidence=row.confidence,
             grade=row.grade,
             market_regime=regime_label,
             status=row.status,
             reason=_snapshot_reason(row, price),
+            stage=stage,
+            # NULL in Phase 1 — no model exists yet; never fabricated.
+            tp1_probability=None,
+            tp2_probability=None,
+            tp3_probability=None,
+            # At-issuance values carried forward each snapshot (same
+            # pattern already used for confidence/grade above) — NOT a
+            # live rescoring of this symbol this cycle; that's Phase 3
+            # scope (continuous re-evaluation), not built here.
+            current_score=row.score,
+            momentum_score=row.momentum_score,
+            structure_score=row.structure_score,
+            entry_quality=row.entry_quality,
+            mfe_pct=mfe_pct,
+            mae_pct=mae_pct,
+            management_decision=management_decision,
+            decision_reason=decision_reason,
         )
     )
 

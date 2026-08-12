@@ -37,6 +37,17 @@ async def diagnostics_trades():
     }
 
 
+@router.get("/diagnostics/target-probabilities")
+async def diagnostics_target_probabilities(min_sample: int = 3):
+    """Multi-target Phase 1: read-only conditional probabilities computed
+    from real TradeOutcome data — P(TP1), P(TP2 | TP1 reached),
+    P(TP3 | TP2 reached), return-after-target, and reversal-after-target
+    rates. NOT model output — see app/engine/forensic_diagnostics.py:
+    target_conditional_probabilities for why P(TP2) and P(TP2|TP1 reached)
+    are different questions and why every rate is gated behind min_sample."""
+    return fd.target_conditional_probabilities(min_sample=min_sample)
+
+
 @router.get("/diagnostics/patterns")
 async def diagnostics_patterns():
     """Section 14/15/16: feature-interaction discovery (searched across ALL

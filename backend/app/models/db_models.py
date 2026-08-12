@@ -318,6 +318,44 @@ class PredictionSnapshot(Base):
     status: Mapped[str] = mapped_column(String(20))  # TradeOutcome.status at check time
     reason: Mapped[str] = mapped_column(String(200))  # plain-English, deterministic — never LLM-authored
 
+    # --- Multi-stage target tracking (Phase 1) ---
+    # "PRE_ENTRY" | "OPEN" | "TP1_REACHED" | "TP2_REACHED" | "TP3_REACHED" |
+    # "EXITED" — derived purely from row.status + tp1_hit/tp2_hit/tp3_hit,
+    # computed in trade_outcomes.py:_compute_stage(). A trade's OWN
+    # tp1_hit/tp2_hit/tp3_hit/tp1_hit_at/tp2_hit_at/tp3_hit_at (TradeOutcome)
+    # already ARE the target-reached facts and timestamps this redesign
+    # asked for — deliberately not duplicated here under new names.
+    stage: Mapped[str | None] = mapped_column(String(20), nullable=True)
+
+    # Target-specific probabilities. NULL in Phase 1 — no model exists yet.
+    # Phase 2 will populate these from a walk-forward-validated model or
+    # leave them NULL/insufficient_data; they must NEVER be filled by
+    # Claude or invented from the win-probability number.
+    tp1_probability: Mapped[float | None] = mapped_column(Float, nullable=True)
+    tp2_probability: Mapped[float | None] = mapped_column(Float, nullable=True)
+    tp3_probability: Mapped[float | None] = mapped_column(Float, nullable=True)
+
+    current_score: Mapped[float | None] = mapped_column(Float, nullable=True)
+    distance_to_tp3_pct: Mapped[float | None] = mapped_column(Float, nullable=True)
+    # Running MFE/MAE AT THIS SNAPSHOT — distinct from TradeOutcome's
+    # max_runup_pct/max_drawdown_pct, which are only finalized at close.
+    # This is what lets a later analysis answer "did the system recognize
+    # deterioration before the trade actually stopped."
+    mfe_pct: Mapped[float | None] = mapped_column(Float, nullable=True)
+    mae_pct: Mapped[float | None] = mapped_column(Float, nullable=True)
+
+    entry_quality: Mapped[str | None] = mapped_column(String(20), nullable=True)
+    momentum_score: Mapped[float | None] = mapped_column(Float, nullable=True)
+    structure_score: Mapped[float | None] = mapped_column(Float, nullable=True)
+
+    # Phase 1: purely deterministic mapping from stage/status — NOT driven
+    # by tp2_probability/tp3_probability (those are NULL until Phase 2), and
+    # NEVER decided by Claude. "HOLD" only becomes "CONTINUE"/"TAKE_PROFIT"
+    # once a validated probability model and the (still-inactive) 80%
+    # continuation rule exist — see decision_reason for why, every time.
+    management_decision: Mapped[str | None] = mapped_column(String(20), nullable=True)
+    decision_reason: Mapped[str | None] = mapped_column(String(300), nullable=True)
+
 
 class MarketRegimeState(Base):
     """The scanner's latest market-regime read (single row, id=1).
