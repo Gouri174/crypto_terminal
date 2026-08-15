@@ -40,17 +40,36 @@ async def get_opportunities(limit: int = Query(default=6, le=LLM_CANDIDATES)):
 
 
 def _load_top(limit: int) -> list[LiveOpportunity]:
+    """Long/short candidates always rank above no_trade ones, regardless of
+    score — a no_trade setup can score highest (strong overall setup, just
+    no directional edge right now: mixed timeframes, or exhausted entry
+    timing) but there's no trade to actually profit from, so it shouldn't
+    crowd out a real long/short call in a fixed-size top-N slot. no_trade
+    rows are still included to fill remaining slots (still useful context
+    on what the engine is watching), just sorted last. Within each group,
+    unchanged: highest score_total first.
+
+    trade_plan.recommendation isn't queryable as a SQL column (JSON blob),
+    so this pulls every scored-and-explained row and partitions in Python
+    rather than in the query — fine at this app's scanned-universe scale
+    (tens to low hundreds of rows), same tradeoff other reports here make."""
     session = SessionLocal()
     try:
-        return (
+        rows = (
             session.execute(
                 select(LiveOpportunity)
                 .where(LiveOpportunity.trade_plan.is_not(None))
                 .order_by(LiveOpportunity.score_total.desc())
-                .limit(limit)
             )
             .scalars()
             .all()
         )
     finally:
         session.close()
+
+    def _sort_key(row: LiveOpportunity) -> tuple[int, float]:
+        direction = (row.trade_plan or {}).get("recommendation")
+        is_no_trade = 1 if direction not in ("long", "short") else 0
+        return (is_no_trade, -row.score_total)
+
+    return sorted(rows, key=_sort_key)[:limit]
