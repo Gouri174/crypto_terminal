@@ -23,6 +23,7 @@ from app.engine.entry_flags import classify_market_cluster, compute_diagnostic_f
 from app.engine.expected_value import compute_expected_value
 from app.engine.reasoning import PROMPT_VERSION
 from app.engine.scoring import SCORE_FORMULA_VERSION
+from app.engine.trade_manager import compute_management_decision, stage_probabilities
 from app.models.db_models import PredictionSnapshot, TradeOutcome
 
 # Same window forensic_diagnostics.correlation_concentration_analysis() uses
@@ -371,34 +372,6 @@ def _compute_stage(row: TradeOutcome) -> str:
     return "OPEN"
 
 
-def _compute_management_decision(row: TradeOutcome, stage: str) -> tuple[str, str]:
-    """Phase 1 ONLY: a deterministic mapping from stage/status — there is
-    no target-probability model yet (tp1/2/3_probability are NULL until
-    Phase 2 ships), so this never recommends CONTINUE/TAKE_PROFIT/
-    REDUCE_RISK on probability grounds and the 80% continuation rule is
-    NOT active. Every reason string says so explicitly rather than
-    implying a real decision was made. This is intentionally boring —
-    real continuous reassessment (Phase 3) and the continuation rule
-    (Phase 5) are separate, later work, not built here."""
-    if stage == "PRE_ENTRY":
-        return "HOLD", "Waiting for price to enter the proposed zone."
-    if stage == "EXITED":
-        if row.status == "closed_win":
-            return "TAKE_PROFIT", "Reached the outermost defined target this cycle."
-        if row.status == "closed_loss":
-            return "STOPPED", "Stop hit this cycle."
-        if row.status == "closed_stale":
-            return "INVALIDATED", "Never entered within the max holding window."
-        return "INVALIDATED", "Superseded by a new plan before resolving."
-    if stage == "OPEN":
-        return "HOLD", "Position open, TP1 not yet reached. No target-probability model active yet (Phase 2 not built) — no automatic continuation/exit decision is made on probability grounds."
-    if stage == "TP1_REACHED":
-        return "HOLD", "TP1 reached. TP2 continuation is decided by the existing outermost-target close logic (unchanged) — the 80% continuation rule is NOT active (Phase 5 not started)."
-    if stage == "TP2_REACHED":
-        return "HOLD", "TP2 reached. TP3 continuation is decided by the existing outermost-target close logic (unchanged) — the 80% continuation rule is NOT active (Phase 5 not started)."
-    return "HOLD", f"Unhandled stage {stage!r} — defaulting to HOLD rather than guessing."
-
-
 def record_snapshot(
     session, row: TradeOutcome, price: float, now_ms: int, regime_label: str | None
 ) -> None:
@@ -434,7 +407,12 @@ def record_snapshot(
     )
 
     stage = _compute_stage(row)
-    management_decision, decision_reason = _compute_management_decision(row, stage)
+    # Karma V2.1 Phase 2 — probabilities come from expected_value.py's
+    # resolved-trade frequency tables (never Claude, never a trained
+    # model), conditioned on this trade's own direction/entry_quality/
+    # regime. See trade_manager.py's module docstring.
+    probs = stage_probabilities(row, stage)
+    management_decision, decision_reason = compute_management_decision(row, stage, probs, mae_pct)
 
     session.add(
         PredictionSnapshot(
@@ -453,10 +431,9 @@ def record_snapshot(
             status=row.status,
             reason=_snapshot_reason(row, price),
             stage=stage,
-            # NULL in Phase 1 — no model exists yet; never fabricated.
-            tp1_probability=None,
-            tp2_probability=None,
-            tp3_probability=None,
+            tp1_probability=probs.get("tp1_probability"),
+            tp2_probability=probs.get("tp2_probability"),
+            tp3_probability=probs.get("tp3_probability"),
             # At-issuance values carried forward each snapshot (same
             # pattern already used for confidence/grade above) — NOT a
             # live rescoring of this symbol this cycle; that's Phase 3

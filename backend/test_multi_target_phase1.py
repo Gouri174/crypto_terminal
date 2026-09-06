@@ -99,13 +99,19 @@ def test_full_stage_lifecycle():
     snaps = get_snapshots(row.id)
     check("stage=PRE_ENTRY while pending", snaps[-1].stage == "PRE_ENTRY", snaps[-1].stage)
     check("management_decision=HOLD at PRE_ENTRY", snaps[-1].management_decision == "HOLD", snaps[-1].management_decision)
-    check("tp1_probability NULL in Phase 1 (never fabricated)", snaps[-1].tp1_probability is None)
+    check(
+        "tp1_probability is a real frequency-table estimate at PRE_ENTRY (Phase 2 live), not fabricated by Claude/ML",
+        snaps[-1].tp1_probability is not None, snaps[-1].tp1_probability,
+    )
 
     # OPEN
     trade_outcomes.update_open_trades({symbol: 100.5}, now_ms=4_020_000)
     snaps = get_snapshots(row.id)
     check("stage=OPEN after entry triggers", snaps[-1].stage == "OPEN", snaps[-1].stage)
-    check("decision_reason mentions Phase 2 not built", "Phase 2 not built" in snaps[-1].decision_reason, snaps[-1].decision_reason)
+    check(
+        "decision_reason cites the historical P(TP1) estimate (Phase 2 trade_manager.py, not the old Phase-1 placeholder)",
+        "P(TP1)" in snaps[-1].decision_reason, snaps[-1].decision_reason,
+    )
 
     # TP1_REACHED
     trade_outcomes.update_open_trades({symbol: 105.5}, now_ms=4_030_000)

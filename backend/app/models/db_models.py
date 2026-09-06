@@ -360,10 +360,14 @@ class PredictionSnapshot(Base):
     # asked for — deliberately not duplicated here under new names.
     stage: Mapped[str | None] = mapped_column(String(20), nullable=True)
 
-    # Target-specific probabilities. NULL in Phase 1 — no model exists yet.
-    # Phase 2 will populate these from a walk-forward-validated model or
-    # leave them NULL/insufficient_data; they must NEVER be filled by
-    # Claude or invented from the win-probability number.
+    # Target-specific probabilities. NULL on every snapshot recorded before
+    # Karma V2.1 Phase 2 (app/engine/trade_manager.py) shipped — not
+    # backfilled. Populated from app/engine/expected_value.py's resolved-
+    # trade FREQUENCY TABLES (direction/entry_quality/regime conditioned,
+    # with automatic backoff to a coarser conditioning below min sample) —
+    # never a trained model, never filled by Claude, never invented from
+    # the win-probability number. Reported honestly as None whenever the
+    # applicable conditioning has too few resolved trades to estimate.
     tp1_probability: Mapped[float | None] = mapped_column(Float, nullable=True)
     tp2_probability: Mapped[float | None] = mapped_column(Float, nullable=True)
     tp3_probability: Mapped[float | None] = mapped_column(Float, nullable=True)
