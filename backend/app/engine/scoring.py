@@ -10,21 +10,18 @@ component breakdown and historical evidence — never to invent it.
 # performance" analysis can actually separate results by which formula
 # produced them, instead of silently mixing scores from different eras.
 #
-# 2.1 (Karma V2.1, see backend/karma_v2_1_model_improvement_report.md,
-# read-only audit of 86 resolved trades): _momentum_score and
-# _volume_score changed, both with evidence that survived a stratified-
-# by-entry_quality robustness check (Section 2 of that report) — momentum
-# reduced (odds ratio 0.691, negative net lift after controlling for
-# entry_quality), volume increased (odds ratio 2.215, POSITIVE lift in
-# every testable entry_quality stratum). _structure_score's FVG term
-# increased on weaker evidence (odds ratio 1.8, small n=16) — flagged as
-# medium-risk in that report, not the same confidence as momentum/volume.
-# Trend, History, Funding, and Regime are DELIBERATELY UNCHANGED: the same
-# report found Trend's apparent edge does NOT survive the same stratified
-# check (sign flips between entry_quality strata) and History is likely
-# confounded with a specific underperforming symbol group rather than an
-# independent signal — its own Rules 11/12 say "hold, do not act yet."
-SCORE_FORMULA_VERSION = "2.1"
+# A V2.1 commit briefly changed _momentum_score/_volume_score/
+# _structure_score's weights from odds-ratio evidence on 86 resolved
+# trades, then reverted them in the very next commit on explicit
+# direction: measurement (odds ratios, stratified lift) and IMPLEMENTATION
+# (editing this file) had been folded into one pass without a separate
+# sign-off step in between, which is exactly the "don't tune weights on a
+# small sample without a checkpoint" rule this project holds everywhere
+# else. See backend/score_recalibration_report.md and
+# backend/feature_importance.json for the measurement-only replacement —
+# weights here stay at their pre-V2.1 values until that report is
+# explicitly acted on.
+SCORE_FORMULA_VERSION = "1.0"
 
 
 def _tf(features: dict, tf: str) -> dict:
@@ -92,45 +89,29 @@ def _trend_score(features: dict) -> float:
 
 
 def _momentum_score(features: dict) -> float:
-    """V2.1: max contribution reduced from 15 to 12 (karma_v2_1 report,
-    Rule 3 — odds ratio 0.691, i.e. a maxed-momentum trade in the 86-trade
-    audit was LESS likely to win, and the effect held even after
-    controlling for entry_quality). The RSI zone was also narrowed and
-    re-shaped rather than just uniformly scaled down: 50-70 is where the
-    audit found winners concentrate (Rule 4, odds ratio 3.135 — the single
-    strongest odds ratio found in that report), while 25-50 ("RSI 30-49"
-    in the report's own language) had a 92.3% loss rate on n=13 (Rule 1) —
-    previously scored the same as a perfectly healthy reading; now scored
-    like the red flag the data shows it to be."""
     rsi = _tf(features, "4h").get("rsi14")
     macd_hist = _tf(features, "4h").get("macd_hist")
 
     score = 0.0
     if rsi is not None:
-        if 50 <= rsi < 70:
-            score += 7
-        elif 25 <= rsi < 50:
-            score += 1  # V2.1: the specific "chop zone" the audit flagged as its strongest single red flag
-        elif rsi < 25 or rsi >= 80:
-            score += 1  # extreme momentum/exhaustion — reduced from 2
+        if 40 <= rsi <= 65:
+            score += 8
+        elif rsi < 25 or rsi > 80:
+            score += 2  # extreme momentum, lower quality entry
         else:
-            score += 3  # 70-80: elevated but not yet the extreme-exhaustion zone
+            score += 4
     if macd_hist is not None and macd_hist > 0:
-        score += 5  # V2.1: reduced from 7 (part of the overall momentum de-weighting, Rule 3)
+        score += 7
     return round(score, 2)
 
 
 def _volume_score(features: dict) -> float:
-    """V2.1: max contribution increased from 10 to 13 (karma_v2_1 report,
-    Rule 2 — odds ratio 2.215, and the ONLY feature audited whose win-rate
-    lift stayed positive in every entry_quality stratum tested, i.e. it
-    wasn't just riding entry_quality's own known edge)."""
     ind = _tf(features, "4h")
     score = 0.0
     if (ind.get("obv_slope") or 0) > 0:
-        score += 6  # V2.1: was 5
+        score += 5
     if (ind.get("cmf") or 0) > 0:
-        score += 5  # V2.1: was 3
+        score += 3
     mfi = ind.get("mfi")
     if mfi is not None and 20 <= mfi <= 80:
         score += 2
@@ -150,20 +131,15 @@ def _funding_score(features: dict) -> float:
 
 
 def _structure_score(features: dict) -> float:
-    """V2.1: FVG term increased from 5 to 7 (karma_v2_1 report, Rule 10 —
-    odds ratio 1.8, win rate 50.0% vs 35.7% without, positive in both
-    testable entry_quality strata). Flagged as MEDIUM risk in that report
-    (n=16 trades had FVG data at all) — a smaller, more cautious bump than
-    momentum/volume's changes above, not the same confidence level."""
     struct = _structure(features, "4h")
     score = 0.0
     if struct.get("trend") not in (None, "neutral"):
         score += 6
     if struct.get("fvg_up") or struct.get("fvg_down"):
-        score += 7  # V2.1: was 5
+        score += 5
     if struct.get("choch"):
         score += 4
-    return round(min(score, 17), 2)
+    return round(min(score, 15), 2)
 
 
 def _history_score(history_stats: dict | None) -> float:

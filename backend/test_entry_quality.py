@@ -163,13 +163,12 @@ r = classify_entry_quality({}, "no_trade", {})
 check("no_trade direction -> invalid with null score", r["entry_quality"] == "invalid" and r["entry_quality_score"] is None, r)
 
 # ---------------------------------------------------------------------------
-# 11. Score formula — entry_quality.py itself never touched scoring.py;
-#     this project's own SCORE_FORMULA_VERSION (now "2.1") records that
-#     scoring.py's momentum/volume/structure weights WERE intentionally
-#     changed under explicit V2.1 authorization (karma_v2_1_model_
-#     improvement_report.md) — trend is deliberately unchanged (that
-#     report's own Rule 12 said the evidence for touching it wasn't
-#     there yet). Fixed input, hand-verifiable expected components.
+# 11. Score formula unchanged — scoring.py was never touched by this work.
+#     (A V2.1 commit briefly changed momentum/volume/structure weights,
+#     then reverted them the very next commit — see scoring.py's
+#     SCORE_FORMULA_VERSION docstring for why. This assertion is back to
+#     checking the original, pre-V2.1 formula.)
+#     Fixed input, hand-verifiable expected components.
 # ---------------------------------------------------------------------------
 fixed_features = {
     "indicators_1h": {"trend_vs_ema50": "above"},
@@ -180,11 +179,11 @@ fixed_features = {
     "funding_rate": 0.0001,
 }
 breakdown = score_opportunity(fixed_features, None, None, None)
-expected_trend = round(1.0 * 15 + min(30, 40) / 40 * 10, 2)  # 15 + 7.5 = 22.5 — UNCHANGED in V2.1
-expected_momentum = round(7 + 5, 2)  # V2.1: RSI 50-70 band (7) + positive macd_hist (5) = 12 (was 15)
-expected_structure = round(6 + 7, 2)  # V2.1: trend not neutral (6) + fvg (7, was 5) = 13 (was 11)
+expected_trend = round(1.0 * 15 + min(30, 40) / 40 * 10, 2)  # 15 + 7.5 = 22.5
+expected_momentum = round(8 + 7, 2)  # RSI 40-65 band + positive macd_hist = 15
+expected_structure = round(6 + 5, 2)  # trend not neutral + fvg = 11
 check(
-    "score_opportunity() components match hand-computed V2.1 expected values (trend unchanged, momentum reduced, structure's FVG term increased)",
+    "score_opportunity() components match hand-computed expected values (formula unchanged)",
     breakdown["trend"] == expected_trend and breakdown["momentum"] == expected_momentum and breakdown["structure"] == expected_structure,
     breakdown,
 )

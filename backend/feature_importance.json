@@ -1,0 +1,286 @@
+{
+  "n_resolved_trades": 86,
+  "overall_win_rate_pct": 38.4,
+  "methodology": "Fisher's exact test odds ratio + p-value (appropriate for small-sample 2x2 tables), information gain in bits (entropy reduction on win/loss from knowing the feature), and a 95% Wilson CI on the present-side win rate. NOT a trained model of any kind.",
+  "features": [
+    {
+      "feature": "trend_high (trend_score>=22)",
+      "available": true,
+      "n_present": 37,
+      "n_absent": 49,
+      "win_rate_present_pct": 40.5,
+      "win_rate_present_ci_95": [
+        26.3,
+        56.5
+      ],
+      "win_rate_absent_pct": 36.7,
+      "avg_return_present_pct": 1.781,
+      "avg_return_absent_pct": -0.009,
+      "tp1_rate_present_pct": 48.6,
+      "tp2_rate_present_pct": 40.5,
+      "tp3_rate_present_pct": 10.8,
+      "stop_rate_present_pct": 59.5,
+      "odds_ratio": 1.174,
+      "p_value_fisher_exact": 0.8236,
+      "lift_vs_overall_pct_points": 2.1,
+      "information_gain_bits": 0.0011
+    },
+    {
+      "feature": "structure_high (structure_score>=9)",
+      "available": true,
+      "n_present": 35,
+      "n_absent": 51,
+      "win_rate_present_pct": 45.7,
+      "win_rate_present_ci_95": [
+        30.5,
+        61.8
+      ],
+      "win_rate_absent_pct": 33.3,
+      "avg_return_present_pct": 3.707,
+      "avg_return_absent_pct": -1.26,
+      "tp1_rate_present_pct": 45.7,
+      "tp2_rate_present_pct": 45.7,
+      "tp3_rate_present_pct": 22.9,
+      "stop_rate_present_pct": 54.3,
+      "odds_ratio": 1.684,
+      "p_value_fisher_exact": 0.2674,
+      "lift_vs_overall_pct_points": 7.3,
+      "information_gain_bits": 0.0112
+    },
+    {
+      "feature": "momentum_high (momentum_score>=14)",
+      "available": true,
+      "n_present": 59,
+      "n_absent": 27,
+      "win_rate_present_pct": 35.6,
+      "win_rate_present_ci_95": [
+        24.6,
+        48.3
+      ],
+      "win_rate_absent_pct": 44.4,
+      "avg_return_present_pct": -0.06,
+      "avg_return_absent_pct": 2.555,
+      "tp1_rate_present_pct": 44.1,
+      "tp2_rate_present_pct": 35.6,
+      "tp3_rate_present_pct": 18.6,
+      "stop_rate_present_pct": 64.4,
+      "odds_ratio": 0.691,
+      "p_value_fisher_exact": 0.4792,
+      "lift_vs_overall_pct_points": -2.8,
+      "information_gain_bits": 0.0051
+    },
+    {
+      "feature": "volume_high (volume_score>=8)",
+      "available": true,
+      "n_present": 50,
+      "n_absent": 36,
+      "win_rate_present_pct": 46.0,
+      "win_rate_present_ci_95": [
+        33.0,
+        59.6
+      ],
+      "win_rate_absent_pct": 27.8,
+      "avg_return_present_pct": 1.49,
+      "avg_return_absent_pct": -0.251,
+      "tp1_rate_present_pct": 48.0,
+      "tp2_rate_present_pct": 46.0,
+      "tp3_rate_present_pct": 18.0,
+      "stop_rate_present_pct": 54.0,
+      "odds_ratio": 2.215,
+      "p_value_fisher_exact": 0.1163,
+      "lift_vs_overall_pct_points": 7.6,
+      "information_gain_bits": 0.0251
+    },
+    {
+      "feature": "funding_high (funding_score>=8)",
+      "available": true,
+      "n_present": 82,
+      "n_absent": 4,
+      "win_rate_present_pct": 37.8,
+      "win_rate_present_ci_95": [
+        28.1,
+        48.6
+      ],
+      "win_rate_absent_pct": 50.0,
+      "avg_return_present_pct": 0.52,
+      "avg_return_absent_pct": 5.707,
+      "tp1_rate_present_pct": 42.7,
+      "tp2_rate_present_pct": 37.8,
+      "tp3_rate_present_pct": 14.6,
+      "stop_rate_present_pct": 62.2,
+      "odds_ratio": 0.608,
+      "p_value_fisher_exact": 0.636,
+      "lift_vs_overall_pct_points": -0.6,
+      "information_gain_bits": 0.002
+    },
+    {
+      "feature": "history_present",
+      "available": true,
+      "n_present": 9,
+      "n_absent": 77,
+      "win_rate_present_pct": 0.0,
+      "win_rate_present_ci_95": [
+        0,
+        29.9
+      ],
+      "win_rate_absent_pct": 42.9,
+      "avg_return_present_pct": -4.341,
+      "avg_return_absent_pct": 1.358,
+      "tp1_rate_present_pct": 0.0,
+      "tp2_rate_present_pct": 0.0,
+      "tp3_rate_present_pct": 0.0,
+      "stop_rate_present_pct": 100.0,
+      "odds_ratio": 0.0,
+      "p_value_fisher_exact": 0.0113,
+      "lift_vs_overall_pct_points": -38.4,
+      "information_gain_bits": 0.0785
+    },
+    {
+      "feature": "regime_mixed",
+      "available": true,
+      "n_present": 59,
+      "n_absent": 27,
+      "win_rate_present_pct": 45.8,
+      "win_rate_present_ci_95": [
+        33.7,
+        58.3
+      ],
+      "win_rate_absent_pct": 22.2,
+      "avg_return_present_pct": 2.166,
+      "avg_return_absent_pct": -2.309,
+      "tp1_rate_present_pct": 49.2,
+      "tp2_rate_present_pct": 45.8,
+      "tp3_rate_present_pct": 18.6,
+      "stop_rate_present_pct": 54.2,
+      "odds_ratio": 2.953,
+      "p_value_fisher_exact": 0.0552,
+      "lift_vs_overall_pct_points": 7.4,
+      "information_gain_bits": 0.0382
+    },
+    {
+      "feature": "entry_quality_excellent",
+      "available": true,
+      "n_present": 12,
+      "n_absent": 57,
+      "win_rate_present_pct": 66.7,
+      "win_rate_present_ci_95": [
+        39.1,
+        86.2
+      ],
+      "win_rate_absent_pct": 33.3,
+      "avg_return_present_pct": 9.946,
+      "avg_return_absent_pct": -0.495,
+      "tp1_rate_present_pct": 66.7,
+      "tp2_rate_present_pct": 66.7,
+      "tp3_rate_present_pct": 41.7,
+      "stop_rate_present_pct": 33.3,
+      "odds_ratio": 4.0,
+      "p_value_fisher_exact": 0.0495,
+      "lift_vs_overall_pct_points": 28.3,
+      "information_gain_bits": 0.2239
+    },
+    {
+      "feature": "cmf_positive",
+      "available": true,
+      "n_present": 48,
+      "n_absent": 13,
+      "win_rate_present_pct": 43.8,
+      "win_rate_present_ci_95": [
+        30.7,
+        57.7
+      ],
+      "win_rate_absent_pct": 38.5,
+      "avg_return_present_pct": 2.91,
+      "avg_return_absent_pct": -2.464,
+      "tp1_rate_present_pct": 47.9,
+      "tp2_rate_present_pct": 43.8,
+      "tp3_rate_present_pct": 16.7,
+      "stop_rate_present_pct": 56.2,
+      "odds_ratio": 1.244,
+      "p_value_fisher_exact": 1.0,
+      "lift_vs_overall_pct_points": 5.4,
+      "information_gain_bits": 0.2635
+    },
+    {
+      "feature": "obv",
+      "available": false,
+      "note": "Not stored per-trade in this codebase \u2014 not computed, not fabricated."
+    },
+    {
+      "feature": "rsi_healthy_50_70",
+      "available": true,
+      "n_present": 66,
+      "n_absent": 15,
+      "win_rate_present_pct": 43.9,
+      "win_rate_present_ci_95": [
+        32.6,
+        55.9
+      ],
+      "win_rate_absent_pct": 13.3,
+      "avg_return_present_pct": 3.111,
+      "avg_return_absent_pct": -9.845,
+      "tp1_rate_present_pct": 51.5,
+      "tp2_rate_present_pct": 43.9,
+      "tp3_rate_present_pct": 19.7,
+      "stop_rate_present_pct": 56.1,
+      "odds_ratio": 5.095,
+      "p_value_fisher_exact": 0.0384,
+      "lift_vs_overall_pct_points": 5.5,
+      "information_gain_bits": 0.1025
+    },
+    {
+      "feature": "adx_trending_20_50",
+      "available": true,
+      "n_present": 56,
+      "n_absent": 25,
+      "win_rate_present_pct": 35.7,
+      "win_rate_present_ci_95": [
+        24.5,
+        48.8
+      ],
+      "win_rate_absent_pct": 44.0,
+      "avg_return_present_pct": 0.359,
+      "avg_return_absent_pct": 1.501,
+      "tp1_rate_present_pct": 41.1,
+      "tp2_rate_present_pct": 35.7,
+      "tp3_rate_present_pct": 10.7,
+      "stop_rate_present_pct": 64.3,
+      "odds_ratio": 0.707,
+      "p_value_fisher_exact": 0.6212,
+      "lift_vs_overall_pct_points": -2.7,
+      "information_gain_bits": 0.0607
+    },
+    {
+      "feature": "fvg_present",
+      "available": true,
+      "n_present": 16,
+      "n_absent": 32,
+      "win_rate_present_pct": 50.0,
+      "win_rate_present_ci_95": [
+        28.0,
+        72.0
+      ],
+      "win_rate_absent_pct": 40.6,
+      "avg_return_present_pct": 5.695,
+      "avg_return_absent_pct": -0.857,
+      "tp1_rate_present_pct": 50.0,
+      "tp2_rate_present_pct": 50.0,
+      "tp3_rate_present_pct": 25.0,
+      "stop_rate_present_pct": 50.0,
+      "odds_ratio": 1.462,
+      "p_value_fisher_exact": 0.5553,
+      "lift_vs_overall_pct_points": 11.6,
+      "information_gain_bits": 0.412
+    },
+    {
+      "feature": "bos",
+      "available": false,
+      "note": "Not stored per-trade in this codebase \u2014 not computed, not fabricated."
+    },
+    {
+      "feature": "choch",
+      "available": false,
+      "note": "Not stored per-trade in this codebase \u2014 not computed, not fabricated."
+    }
+  ]
+}

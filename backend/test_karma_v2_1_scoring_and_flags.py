@@ -1,6 +1,14 @@
-"""Manual verification script for Karma V2.1 Phase 3 (score weight
-recalibration) and Phase 6 (Red Flag engine), plus the soft short-side
-derate flag (Phase 5).
+"""Manual verification script for Karma V2.1 Phase 6 (Red Flag engine) and
+the soft short-side derate flag (Phase 5).
+
+Phase 3 (score weight recalibration) was REVERTED in the commit right
+after it shipped — measurement (odds ratios, stratified lift) and
+implementation (editing scoring.py) had been folded into one pass without
+a separate sign-off checkpoint in between. See scoring.py's
+SCORE_FORMULA_VERSION docstring and score_recalibration_report.md /
+feature_importance.json for the measurement-only replacement. Section 1
+below now confirms the revert took, instead of asserting the (reverted)
+new weights.
 
 Not a pytest suite (no test infra elsewhere in this project — see
 test_trade_outcomes.py, same pattern). Run directly with
@@ -44,15 +52,12 @@ def cleanup():
 
 
 # ---------------------------------------------------------------------------
-# 1. Score formula version bumped
+# 1. Score formula reverted — SCORE_FORMULA_VERSION back to 1.0, and every
+#    component matches the ORIGINAL pre-V2.1 formula exactly.
 # ---------------------------------------------------------------------------
-check("SCORE_FORMULA_VERSION bumped to 2.1", SCORE_FORMULA_VERSION == "2.1", SCORE_FORMULA_VERSION)
+check("SCORE_FORMULA_VERSION reverted to 1.0 (V2.1 weight changes rolled back)", SCORE_FORMULA_VERSION == "1.0", SCORE_FORMULA_VERSION)
 
 
-# ---------------------------------------------------------------------------
-# 2. Momentum V2.1: RSI 50-70 rewarded, RSI 30-49 ("chop zone") penalized,
-#    max contribution reduced from 15 to 12.
-# ---------------------------------------------------------------------------
 def features_with_rsi(rsi, macd_hist=1.0):
     return {
         "indicators_4h": {"rsi14": rsi, "macd_hist": macd_hist, "adx14": 0},
@@ -61,43 +66,28 @@ def features_with_rsi(rsi, macd_hist=1.0):
 
 healthy = score_opportunity(features_with_rsi(60), None, None, None)
 chop = score_opportunity(features_with_rsi(35), None, None, None)
-extreme = score_opportunity(features_with_rsi(10), None, None, None)
-check("RSI 50-70 (healthy) scores higher momentum than RSI 30-49 (chop zone)", healthy["momentum"] > chop["momentum"], (healthy["momentum"], chop["momentum"]))
-check("RSI 30-49 chop zone scores the SAME low momentum as extreme exhaustion (both flagged as poor)", chop["momentum"] == extreme["momentum"], (chop["momentum"], extreme["momentum"]))
-check("max momentum contribution is now 12 (was 15)", healthy["momentum"] == 12.0, healthy["momentum"])
+check("RSI 40-65 scores 8+7=15 momentum (original formula, no V2.1 chop-zone penalty)", healthy["momentum"] == 15.0, healthy["momentum"])
+check("RSI 35 (the former 'chop zone') scores the original mid-band 4+7=11, NOT a special penalty", chop["momentum"] == 11.0, chop["momentum"])
 
-
-# ---------------------------------------------------------------------------
-# 3. Volume V2.1: max contribution increased from 10 to 13.
-# ---------------------------------------------------------------------------
 full_volume_features = {"indicators_4h": {"obv_slope": 1, "cmf": 0.1, "mfi": 50}}
 vol_breakdown = score_opportunity(full_volume_features, None, None, None)
-check("max volume contribution is now 13 (was 10)", vol_breakdown["volume"] == 13.0, vol_breakdown["volume"])
+check("max volume contribution is back to 10 (not 13)", vol_breakdown["volume"] == 10.0, vol_breakdown["volume"])
 
-
-# ---------------------------------------------------------------------------
-# 4. Structure V2.1: FVG term increased from 5 to 7, max structure 17.
-# ---------------------------------------------------------------------------
 struct_features = {
     "indicators_4h": {},
     "structure_4h": {"trend": "bull", "fvg_up": True, "fvg_down": False, "choch": True},
 }
 struct_breakdown = score_opportunity(struct_features, None, None, None)
-check("structure score reflects FVG=7 (was 5): 6 (trend) + 7 (fvg) + 4 (choch) = 17", struct_breakdown["structure"] == 17.0, struct_breakdown["structure"])
+check("structure score is back to the original 6+5+4=15 (FVG term back to 5, not 7)", struct_breakdown["structure"] == 15.0, struct_breakdown["structure"])
 
-
-# ---------------------------------------------------------------------------
-# 5. Trend, History, Funding, Regime UNCHANGED (explicit "hold" per the
-#    V2.1 report's Rules 11/12 — mixed/inconclusive stratified evidence).
-# ---------------------------------------------------------------------------
 trend_features = {
     "indicators_1h": {"trend_vs_ema50": "above"}, "indicators_4h": {"trend_vs_ema50": "above", "adx14": 30},
     "indicators_1d": {"trend_vs_ema50": "above"},
 }
 trend_breakdown = score_opportunity(trend_features, None, None, None)
-check("trend formula unchanged: 15 + 30/40*10 = 22.5 (same as pre-V2.1)", trend_breakdown["trend"] == 22.5, trend_breakdown["trend"])
+check("trend formula unchanged throughout (never touched): 15 + 30/40*10 = 22.5", trend_breakdown["trend"] == 22.5, trend_breakdown["trend"])
 history_breakdown = score_opportunity({}, {"sample_size": 25, "win_rate": 70}, None, None)
-check("history formula unchanged: (70-50)/50*15 = 6.0", history_breakdown["history"] == 6.0, history_breakdown["history"])
+check("history formula unchanged throughout (never touched): (70-50)/50*15 = 6.0", history_breakdown["history"] == 6.0, history_breakdown["history"])
 
 
 # ---------------------------------------------------------------------------
