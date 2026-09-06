@@ -8,7 +8,21 @@ see that module's own docstring for the full contract.
 
 from fastapi import APIRouter, HTTPException
 
-from app.analytics import decision_audit, karma_explain, missed_opportunity, position_sizing, strategy_attribution, trade_quality
+from app.analytics import (
+    calibration_dashboard as calibration_dashboard_module,
+    daily_scorecard,
+    decision_audit,
+    karma_explain,
+    market_health,
+    missed_opportunity,
+    portfolio_exposure as portfolio_exposure_module,
+    position_sizing,
+    prediction_metadata,
+    strategy_attribution,
+    trade_journal,
+    trade_quality,
+    trade_truth,
+)
 from app.engine import calibration
 from app.engine import performance_center as pc
 from app.engine import trade_reports
@@ -204,3 +218,84 @@ async def missed_opportunity_status():
     under this session's 30-day freeze) — this reports whatever has been
     recorded manually/independently so far."""
     return missed_opportunity.missed_opportunity_summary()
+
+
+# ---------------------------------------------------------------------------
+# Karma V3.2 additions
+# ---------------------------------------------------------------------------
+
+@router.get("/performance/trade-truth/{trade_outcome_id}")
+async def trade_truth_for_id(trade_outcome_id: int):
+    """Phase A: forensic verdict for one resolved trade — see
+    app/analytics/trade_truth.py for the full taxonomy and the two
+    verdicts (late_entry, near_miss_early_stop) with disclosed limits."""
+    result = trade_truth.truth_for_trade(trade_outcome_id)
+    if result is None:
+        raise HTTPException(status_code=404, detail=f"No resolved/stale TradeOutcome with id={trade_outcome_id}")
+    return result
+
+
+@router.get("/performance/trade-truth")
+async def trade_truth_leaderboard(min_sample: int = 3):
+    """Phase A: verdict distribution across every resolved trade."""
+    return trade_truth.truth_leaderboard(min_sample=min_sample)
+
+
+@router.get("/performance/prediction-versions")
+async def prediction_version_comparison(min_sample: int = 3):
+    """Phase B: win rate / PF grouped by prediction_version — see
+    app/analytics/prediction_metadata.py."""
+    return prediction_metadata.version_comparison_leaderboard(min_sample=min_sample)
+
+
+@router.get("/performance/market-health")
+async def market_health_score():
+    """Phase C: 0-100 "is today a good day to trade" score — see
+    app/analytics/market_health.py for which components are proxies."""
+    return await market_health.current_market_health()
+
+
+@router.get("/performance/portfolio-exposure")
+async def portfolio_exposure_endpoint():
+    """Phase D: exposure across currently open/pending trades — see
+    app/analytics/portfolio_exposure.py for why "BTC correlation" is a
+    symbol-family proxy, not a computed coefficient."""
+    return portfolio_exposure_module.portfolio_exposure()
+
+
+@router.get("/performance/daily-scorecard/morning")
+async def daily_scorecard_morning():
+    """Phase E: market health + scanner funnel + portfolio health + top
+    EV opportunities — pure assembly, see app/analytics/daily_scorecard.py."""
+    return await daily_scorecard.morning_report()
+
+
+@router.get("/performance/daily-scorecard/evening")
+async def daily_scorecard_evening(day_ms: int = 86_400_000):
+    """Phase E: today's closed trades, TP summary, best/worst strategy."""
+    return daily_scorecard.evening_report(day_ms=day_ms)
+
+
+@router.get("/performance/missed-opportunity-breakdown")
+async def missed_opportunity_breakdown(min_sample: int = 500):
+    """Phase F: per-rejection-reason directional-move breakdown — still
+    gated behind min_sample, per explicit instruction not to draw
+    conclusions before real volume accumulates."""
+    return missed_opportunity.rejection_outcome_breakdown(min_sample=min_sample)
+
+
+@router.get("/performance/trade-journal/{trade_outcome_id}")
+async def trade_journal_entry(trade_outcome_id: int):
+    """Phase G: strengths/mistakes/repeated-pattern/analogue/recommendation
+    for one trade — synthesis of Karma Explain + Trade Truth."""
+    result = trade_journal.journal_entry(trade_outcome_id)
+    if result is None:
+        raise HTTPException(status_code=404, detail=f"No TradeOutcome with id={trade_outcome_id}")
+    return result
+
+
+@router.get("/performance/calibration-dashboard")
+async def calibration_dashboard_endpoint():
+    """Phase H: confidence calibration curve + Brier/ECE + TP-continuation
+    calibration + EV calibration in one payload — all reused, nothing new."""
+    return calibration_dashboard_module.calibration_dashboard()

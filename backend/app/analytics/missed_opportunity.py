@@ -127,3 +127,39 @@ def missed_opportunity_summary() -> dict:
             "Sample size threshold reached — a real summary can now be built, but isn't computed by this function yet."
         ),
     }
+
+
+def rejection_outcome_breakdown(min_sample: int = MIN_SAMPLE_FOR_SUMMARY) -> dict:
+    """Karma V3.2 Phase F — per-rejection-reason breakdown of resolved
+    (72h check-in complete) rows: how often the directional move was
+    favorable at each checkpoint. Still gated behind min_sample (default
+    the same 500-row threshold as missed_opportunity_summary()) — this is
+    ANALYTICS on top of the existing recorder, not a new capture
+    mechanism, per explicit instruction. Reports real counts below the
+    threshold (nothing hidden) but withholds a rate/conclusion for any
+    reason with too few resolved rows."""
+    from collections import defaultdict
+
+    session = SessionLocal()
+    try:
+        rows = session.execute(select(RejectedOpportunityOutcome).where(RejectedOpportunityOutcome.resolved.is_(True))).scalars().all()
+    finally:
+        session.close()
+
+    by_reason = defaultdict(list)
+    for r in rows:
+        by_reason[r.rejection_reason].append(r)
+
+    breakdown = []
+    for reason, sub in sorted(by_reason.items(), key=lambda kv: -len(kv[1])):
+        n = len(sub)
+        favorable_72h = sum(1 for r in sub if r.directional_move_72h_pct is not None and r.directional_move_72h_pct > 0)
+        entry = {"rejection_reason": reason, "n": n, "reliable": n >= min_sample}
+        if n >= min_sample:
+            entry["favorable_at_72h_pct"] = round(favorable_72h / n * 100, 1)
+            entry["avg_directional_move_72h_pct"] = round(sum(r.directional_move_72h_pct for r in sub if r.directional_move_72h_pct is not None) / n, 3)
+        else:
+            entry["note"] = f"n={n} is below the {min_sample}-row threshold — no rate reported."
+        breakdown.append(entry)
+
+    return {"n_resolved_total": len(rows), "min_sample": min_sample, "by_rejection_reason": breakdown}

@@ -28,6 +28,7 @@ from sqlalchemy import select
 from app.db import SessionLocal
 from app.models.db_models import TradeOutcome
 
+EXPECTED_VALUE_VERSION = "v1"
 MIN_SAMPLE = 5
 _TRADED_STATUSES = ("closed_win", "closed_loss")
 

@@ -19,6 +19,7 @@ Two entry points, both called from background_scanner.py:
 from sqlalchemy import func, select
 
 from app.db import SessionLocal
+from app.analytics.prediction_metadata import build_prediction_metadata
 from app.engine.entry_flags import classify_market_cluster, compute_diagnostic_flags, compute_risk_reward
 from app.engine.calibration import calibrated_confidence
 from app.engine.expected_value import compute_expected_value
@@ -318,6 +319,7 @@ def open_trade_outcome(
             ),
             red_flags=compute_red_flags(entry_indicators, breakdown.get("structure"), historic_probability),
             calibrated_confidence=calibrated_confidence(confidence),
+            prediction_metadata=build_prediction_metadata(),
         )
         session.add(row)
         session.commit()

@@ -321,6 +321,13 @@ class TradeOutcome(Base):
     # BESIDE it. NULL on trades issued before this shipped, not backfilled.
     calibrated_confidence: Mapped[dict | None] = mapped_column(JSON, nullable=True)
 
+    # Karma V3.2 Phase B (app/analytics/prediction_metadata.py) — which
+    # version of every subsystem produced this exact trade. Set ONCE at
+    # issuance and never updated afterward (this column is never
+    # overwritten — a later analysis groups by it, it doesn't rewrite
+    # history). NULL on trades issued before this shipped, not backfilled.
+    prediction_metadata: Mapped[dict | None] = mapped_column(JSON, nullable=True)
+
 
 class PredictionSnapshot(Base):
     """One deterministic validation check of an OPEN TradeOutcome, recorded

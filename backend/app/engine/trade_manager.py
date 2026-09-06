@@ -23,6 +23,7 @@ from app.models.db_models import TradeOutcome
 # Below this sample size, a stage-specific probability is reported but NOT
 # used to drive a recommendation beyond HOLD — this project's own
 # standing rule against tuning/deciding on tiny samples applies here too.
+TRADE_MANAGER_VERSION = "v1"
 MIN_SAMPLE_FOR_RECOMMENDATION = 5
 
 # Thresholds are the measured aggregate/entry_quality-conditioned rates

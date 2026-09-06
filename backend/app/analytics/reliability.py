@@ -22,6 +22,7 @@ from app.db import SessionLocal
 from app.models.db_models import TradeOutcome
 
 _TRADED_STATUSES = ("closed_win", "closed_loss")
+RELIABILITY_VERSION = "v1"
 PRIOR_STRENGTH = 10  # pseudo-trades at the pooled win rate
 
 
