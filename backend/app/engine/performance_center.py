@@ -496,6 +496,54 @@ def coin_leaderboard(min_sample: int = 3) -> dict:
 # 6. Trade Replay API
 # ---------------------------------------------------------------------------
 
+def _replay_pattern(row: TradeOutcome) -> dict:
+    from app.analytics.failure_patterns import lifecycle_pattern, pattern_similarity, risk_tags
+
+    ei = row.entry_indicators or {}
+    similarity = pattern_similarity(ei, row.structure_score, row.historic_probability, row.direction)
+    return {
+        "lifecycle_pattern": lifecycle_pattern(row),
+        "risk_tags": risk_tags(row),
+        "similarity_to_shared_tags": similarity,
+    }
+
+
+def _replay_narrative(row: TradeOutcome) -> list[str]:
+    """Plain-English bullets built from already-stored diagnostic_flags/
+    entry_indicators — never a new judgment, just a readable restatement
+    of facts this row already carries. Empty list (not fabricated text)
+    when nothing notable is stored."""
+    bullets = []
+    ei = row.entry_indicators or {}
+    flags = row.diagnostic_flags or []
+
+    if row.structure_score is not None and row.structure_score >= 9:
+        bullets.append("Structure confirmed (fresh trend break and/or fair value gap present at entry).")
+    elif "HIGH_SCORE_WEAK_STRUCTURE" in flags or "HIGH_MOMENTUM_WEAK_STRUCTURE" in flags:
+        bullets.append("Structure was weak relative to the rest of the setup.")
+
+    cmf = ei.get("cmf")
+    if cmf is not None:
+        bullets.append(f"CMF was {'positive' if cmf > 0 else 'negative'} ({cmf}) at entry.")
+
+    if "OVERBOUGHT" in flags:
+        bullets.append("RSI/stochRSI flagged overbought or oversold at entry (see entry_quality reasons for direction).")
+
+    if "NO_HISTORY" in flags:
+        bullets.append("No stored historical analogue existed for this symbol at entry.")
+
+    if row.level_reasoning:
+        for key, label in (
+            ("entry_reasoning", "Entry"), ("sl_reasoning", "Stop"),
+            ("tp1_reasoning", "TP1"), ("tp2_reasoning", "TP2"), ("tp3_reasoning", "TP3"),
+        ):
+            text = row.level_reasoning.get(key)
+            if text:
+                bullets.append(f"{label} reasoning: {text}")
+
+    return bullets
+
+
 def trade_replay(trade_outcome_id: int) -> dict | None:
     session = SessionLocal()
     try:
@@ -552,6 +600,12 @@ def trade_replay(trade_outcome_id: int) -> dict | None:
         "realized_return_pct": row.realized_return_pct,
         "max_runup_pct": row.max_runup_pct,
         "max_drawdown_pct": row.max_drawdown_pct,
+        # Karma V3.0 — reuses app/analytics/failure_patterns.py rather than
+        # reimplementing classification here; lazy import avoids a
+        # circular dependency (that module also reads scanner_health()
+        # from this one). Only meaningful once the trade has resolved.
+        "pattern": _replay_pattern(row) if row.status in ("closed_win", "closed_loss") else None,
+        "narrative": _replay_narrative(row),
         "prediction_timeline": [
             {
                 "timestamp": s.timestamp, "stage": s.stage, "current_price": s.current_price,
@@ -675,6 +729,26 @@ def red_flag_leaderboard() -> dict:
             "avg_return_pct": _avg([r.realized_return_pct for r in sub]),
         }
     return {"n": len(rows), "by_red_flag_score": buckets}
+
+
+def failure_pattern_leaderboard(min_sample: int = 3) -> dict:
+    """Thin pass-through to app/analytics/failure_patterns.py — kept here
+    too (not just as a standalone module) so the Performance Center
+    dashboard has one place listing every leaderboard it exposes."""
+    from app.analytics.failure_patterns import failure_pattern_leaderboard as _impl
+
+    return _impl(min_sample=min_sample)
+
+
+def coin_reliability_leaderboard(prior_strength: int | None = None) -> dict:
+    """Thin pass-through to app/analytics/reliability.py — Bayesian-
+    shrunk win rate per symbol, distinct from coin_leaderboard() above
+    (which reports raw, unshrunk stats and requires min_sample to even
+    appear; this instead reports EVERY symbol, shrinking thin samples
+    toward the pooled rate rather than hiding them)."""
+    from app.analytics.reliability import PRIOR_STRENGTH, symbol_reliability
+
+    return symbol_reliability(prior_strength=prior_strength if prior_strength is not None else PRIOR_STRENGTH)
 
 
 def open_trade_management_analytics() -> dict:

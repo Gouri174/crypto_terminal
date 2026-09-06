@@ -8,6 +8,7 @@ see that module's own docstring for the full contract.
 
 from fastapi import APIRouter, HTTPException
 
+from app.analytics import position_sizing
 from app.engine import calibration
 from app.engine import performance_center as pc
 from app.engine import trade_reports
@@ -101,3 +102,33 @@ async def feature_importance(min_sample: int = 20, limit: int | None = None):
     duplicating it — this route just exposes it under /performance for
     Phase 7's requested dashboard surface."""
     return trade_reports.feature_importance(min_sample=min_sample, limit=limit)
+
+
+# ---------------------------------------------------------------------------
+# Karma V3.0 additions
+# ---------------------------------------------------------------------------
+
+@router.get("/performance/failure-patterns")
+async def failure_pattern_leaderboard(min_sample: int = 3):
+    """Every resolved loss classified into a lifecycle pattern (mutually
+    exclusive) and zero or more risk tags — see
+    app/analytics/failure_patterns.py. Only patterns with real occurrences
+    in this dataset are ever reported."""
+    return pc.failure_pattern_leaderboard(min_sample=min_sample)
+
+
+@router.get("/performance/coin-reliability")
+async def coin_reliability_leaderboard(prior_strength: int | None = None):
+    """Bayesian-shrunk per-symbol reliability score — see
+    app/analytics/reliability.py. Every symbol with >=1 resolved trade is
+    included (unlike coin_leaderboard's min_sample gate); thin samples are
+    shrunk toward the pooled win rate rather than hidden or overstated."""
+    return pc.coin_reliability_leaderboard(prior_strength=prior_strength)
+
+
+@router.get("/performance/position-size")
+async def position_size(capital: float, risk_pct: float, stop_distance_pct: float, max_leverage: float | None = None):
+    """Pure arithmetic, no ML, no execution — recommends a position size
+    for a given capital/risk-tolerance/stop-distance combination. Never
+    places an order."""
+    return position_sizing.recommend_position_size(capital, risk_pct, stop_distance_pct, max_leverage)
