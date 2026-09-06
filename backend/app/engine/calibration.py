@@ -116,3 +116,23 @@ def calibrated_confidence(raw_confidence: int | None, min_sample: int = MIN_SAMP
         "ci_95": (lo_ci, hi_ci),
         "note": f"Calibrated from {n} resolved trades in the {label} confidence bucket (observed win rate, not the raw formula's output).",
     }
+
+
+def confidence_display(raw_confidence: int | None, min_sample: int = MIN_SAMPLE) -> dict:
+    """Karma V3.1 — the "71 raw / 58 calibrated ±10%, n=22" display format.
+    Thin wrapper around calibrated_confidence(): derives a symmetric ±
+    half-width from the same Wilson CI already computed there, rather
+    than introducing a second uncertainty calculation."""
+    result = calibrated_confidence(raw_confidence, min_sample=min_sample)
+    ci = result.get("ci_95")
+    half_width = None
+    if ci and ci[0] is not None and ci[1] is not None and result.get("calibrated_confidence") is not None:
+        half_width = round((ci[1] - ci[0]) / 2, 1)
+    return {
+        "raw_confidence": result["raw_confidence"],
+        "calibrated_confidence": result["calibrated_confidence"],
+        "uncertainty_pm_pct_points": half_width,
+        "sample_size": result["sample_size"],
+        "confidence_bucket": result["confidence_bucket"],
+        "note": result["note"],
+    }

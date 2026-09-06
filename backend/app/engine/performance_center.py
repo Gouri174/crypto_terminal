@@ -803,6 +803,12 @@ def open_trade_management_analytics() -> dict:
         )
 
         recommendation, reason = _recommend(row, latest)
+        # V3.1 — reuses trade_manager.py's conditional_triggers() rather
+        # than duplicating "if price reaches level X" logic here.
+        from app.engine.trade_manager import conditional_triggers
+        from app.engine.trade_outcomes import _compute_stage
+
+        triggers = conditional_triggers(row, _compute_stage(row))
 
         trades.append({
             "trade_outcome_id": row.id, "symbol": row.symbol, "direction": row.direction, "status": row.status,
@@ -822,6 +828,7 @@ def open_trade_management_analytics() -> dict:
             "mae_pct": latest.mae_pct if latest else None,
             "recommendation": recommendation,
             "recommendation_reason": reason,
+            "conditional_triggers": triggers,
         })
 
     return {"n_open_trades": len(trades), "trades": trades, "note": "Analytics only — nothing here executes, modifies, or closes any trade."}

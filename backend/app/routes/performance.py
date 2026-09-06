@@ -8,7 +8,7 @@ see that module's own docstring for the full contract.
 
 from fastapi import APIRouter, HTTPException
 
-from app.analytics import position_sizing
+from app.analytics import decision_audit, karma_explain, position_sizing, strategy_attribution, trade_quality
 from app.engine import calibration
 from app.engine import performance_center as pc
 from app.engine import trade_reports
@@ -132,3 +132,64 @@ async def position_size(capital: float, risk_pct: float, stop_distance_pct: floa
     for a given capital/risk-tolerance/stop-distance combination. Never
     places an order."""
     return position_sizing.recommend_position_size(capital, risk_pct, stop_distance_pct, max_leverage)
+
+
+# ---------------------------------------------------------------------------
+# Karma V3.1 additions
+# ---------------------------------------------------------------------------
+
+@router.get("/performance/trade-quality/{trade_outcome_id}")
+async def trade_quality_score(trade_outcome_id: int):
+    """The 0-100 Trade Quality composite — synthesizes entry_quality, EV,
+    reliability, calibrated confidence, structure, and red flags. See
+    app/analytics/trade_quality.py for the fixed (not ML-tuned) formula."""
+    from sqlalchemy import select
+
+    from app.db import SessionLocal
+    from app.models.db_models import TradeOutcome
+
+    session = SessionLocal()
+    try:
+        row = session.execute(select(TradeOutcome).where(TradeOutcome.id == trade_outcome_id)).scalar_one_or_none()
+    finally:
+        session.close()
+    if row is None:
+        raise HTTPException(status_code=404, detail=f"No TradeOutcome with id={trade_outcome_id}")
+    return trade_quality.trade_quality_for_row(row)
+
+
+@router.get("/performance/confidence-display")
+async def confidence_display(raw_confidence: int):
+    """Reliability-adjusted confidence: raw / calibrated / ±uncertainty /
+    sample size — see app/engine/calibration.py:confidence_display()."""
+    return calibration.confidence_display(raw_confidence)
+
+
+@router.get("/performance/explain/{trade_outcome_id}")
+async def explain_trade(trade_outcome_id: int):
+    """Karma Explain — bullish/risk evidence, historical context, failure-
+    pattern similarity, and (for open trades) an action plan with
+    conditional triggers. Pure synthesis of already-existing modules, see
+    app/analytics/karma_explain.py."""
+    result = karma_explain.explain_trade(trade_outcome_id)
+    if result is None:
+        raise HTTPException(status_code=404, detail=f"No TradeOutcome with id={trade_outcome_id}")
+    return result
+
+
+@router.get("/performance/decision-audit")
+async def decision_audit_leaderboard(min_sample: int = 3):
+    """accepted_because / rejected_checks / warnings per resolved trade,
+    aggregated by condition combination — computed by re-running
+    decision.py's existing, UNMODIFIED market_checklist() against stored
+    score breakdowns. See app/analytics/decision_audit.py."""
+    return decision_audit.decision_audit_leaderboard(min_sample=min_sample)
+
+
+@router.get("/performance/strategy-attribution")
+async def strategy_leaderboard(min_sample: int = 3):
+    """Every resolved trade classified into one strategy family from
+    already-stored fields — see app/analytics/strategy_attribution.py for
+    the honest disclosure of which categories are approximated proxies
+    (this codebase has no per-trade BOS/CHoCH boolean)."""
+    return strategy_attribution.strategy_leaderboard(min_sample=min_sample)

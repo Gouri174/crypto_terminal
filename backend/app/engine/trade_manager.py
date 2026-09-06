@@ -146,3 +146,23 @@ def compute_management_decision(
         )
 
     return "HOLD", f"Unhandled stage {stage!r} — defaulting to HOLD rather than guessing."
+
+
+def conditional_triggers(row: TradeOutcome, stage: str) -> list[str]:
+    """Karma V3.1 — deterministic "if price reaches level X, do Y"
+    statements built ONLY from levels already defined on the plan
+    (entry/stop/TP1/TP2/TP3). Deliberately does NOT include indicator-
+    based triggers like "if CMF turns negative, exit" — this app has no
+    live per-scan indicator snapshot to check that against (only the
+    at-issuance entry_indicators are stored), so a CMF-conditioned trigger
+    would be unverifiable at the moment it fired; not built rather than
+    faked."""
+    triggers = []
+    if stage == "OPEN" and row.tp1 is not None:
+        triggers.append(f"If price reaches {row.tp1:g} (TP1): re-evaluate for a move-stop-to-entry suggestion.")
+    if stage == "TP1_REACHED" and row.tp2 is not None:
+        triggers.append(f"If price reaches {row.tp2:g} (TP2): re-evaluate for a hold-for-TP3 or move-stop-to-TP1 suggestion.")
+        triggers.append(f"If price returns to entry ({row.entry:g}): this app's own history shows this happens on a real minority of trades post-TP1 — worth a manual check-in, not an automatic exit.")
+    if stage == "TP2_REACHED" and row.tp3 is not None:
+        triggers.append(f"If price reaches {row.tp3:g} (TP3): position closes per the existing outermost-target logic (unchanged).")
+    return triggers
