@@ -20,6 +20,7 @@ from sqlalchemy import func, select
 
 from app.db import SessionLocal
 from app.engine.entry_flags import classify_market_cluster, compute_diagnostic_flags, compute_risk_reward
+from app.engine.calibration import calibrated_confidence
 from app.engine.expected_value import compute_expected_value
 from app.engine.reasoning import PROMPT_VERSION
 from app.engine.red_flags import compute_red_flags
@@ -316,6 +317,7 @@ def open_trade_outcome(
                 entry_quality=entry_quality, market_regime=(regime or {}).get("label"),
             ),
             red_flags=compute_red_flags(entry_indicators, breakdown.get("structure"), historic_probability),
+            calibrated_confidence=calibrated_confidence(confidence),
         )
         session.add(row)
         session.commit()

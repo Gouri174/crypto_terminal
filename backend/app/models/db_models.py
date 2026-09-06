@@ -314,6 +314,13 @@ class TradeOutcome(Base):
     # issued before this shipped, not backfilled.
     red_flags: Mapped[dict | None] = mapped_column(JSON, nullable=True)
 
+    # Karma V2.1 Phase 4 (app/engine/calibration.py) — a post-hoc lookup
+    # of `confidence`'s bucket against OBSERVED historical win rate at
+    # issuance. Does NOT change confidence.py's underlying formula (that
+    # file is untouched) and does NOT replace `confidence` — shown
+    # BESIDE it. NULL on trades issued before this shipped, not backfilled.
+    calibrated_confidence: Mapped[dict | None] = mapped_column(JSON, nullable=True)
+
 
 class PredictionSnapshot(Base):
     """One deterministic validation check of an OPEN TradeOutcome, recorded

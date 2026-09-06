@@ -80,6 +80,8 @@ def _serialize(row: TradeOutcome) -> dict:
         "expected_value": row.expected_value,
         # Karma V2.1 Phase 6 — observational only, never fed back into score/confidence.
         "red_flags": row.red_flags,
+        # Karma V2.1 Phase 4 — shown BESIDE raw `confidence`, never replacing it.
+        "calibrated_confidence": row.calibrated_confidence,
     }
 
 
