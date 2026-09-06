@@ -308,6 +308,12 @@ class TradeOutcome(Base):
     # capture field on this table.
     expected_value: Mapped[dict | None] = mapped_column(JSON, nullable=True)
 
+    # Karma V2.1 Phase 6 (app/engine/red_flags.py) — purely observational,
+    # computed once at issuance from data already captured above. Does
+    # NOT feed back into score/confidence/entry-decision. NULL on trades
+    # issued before this shipped, not backfilled.
+    red_flags: Mapped[dict | None] = mapped_column(JSON, nullable=True)
+
 
 class PredictionSnapshot(Base):
     """One deterministic validation check of an OPEN TradeOutcome, recorded

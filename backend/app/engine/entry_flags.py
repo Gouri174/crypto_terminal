@@ -83,6 +83,7 @@ def compute_diagnostic_flags(
     ml_probability: float | None,
     historic_probability: float | None,
     same_window_signal_count: int,
+    direction: str | None = None,
 ) -> list[str]:
     """Every flag corresponds to a POSSIBLE-or-weaker pattern from the
     forensic report (app/engine/forensic_diagnostics.py) — computed once at
@@ -125,5 +126,18 @@ def compute_diagnostic_flags(
         flags.append("LATE_ENTRY")
     if entry_quality == "exhausted":
         flags.append("EXHAUSTED_ENTRY")
+
+    # Karma V2.1 Phase 5 (karma_v2_1_model_improvement_report.md, Rule 5/6)
+    # — SOFT, observational only. That report's own evidence (n=4 clean
+    # shorts after excluding monitoring-outage-corrupted trades) was
+    # explicitly too thin to justify a hard reject rule (the pasted
+    # external roadmap's "entry_quality==excellent AND confidence>=68 else
+    # no_trade" gate would have blocked nearly every short outright on
+    # n=4). This flags a short whose stop is tighter, in ATR terms, than
+    # the ~0.83 ATR average long-side stop measured in that report — a
+    # visible warning, not an entry decision.
+    entry_to_sl_atr = risk_reward.get("entry_to_sl_atr")
+    if direction == "short" and entry_to_sl_atr is not None and entry_to_sl_atr < 0.83:
+        flags.append("SHORT_TIGHT_STOP")
 
     return flags
