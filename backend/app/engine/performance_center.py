@@ -602,6 +602,81 @@ def _recommend(row: TradeOutcome, latest: PredictionSnapshot | None) -> tuple[st
     return "Hold", "Open, no target reached yet, no adverse-excursion concern flagged."
 
 
+# ---------------------------------------------------------------------------
+# Karma V2.1 Phase 7 additions — reuses V2.1-A's expected_value.py and
+# V2.1-C's red_flags.py rather than recomputing anything; these two are
+# genuinely new leaderboards, not duplicates of anything already in
+# trade_reports.py/forensic_diagnostics.py (which already cover feature
+# importance, entry-quality performance, and confidence calibration — see
+# app/routes/performance.py for how those get reused via routes instead of
+# being reimplemented here).
+# ---------------------------------------------------------------------------
+
+def ev_leaderboard(min_sample: int = 1) -> dict:
+    """Ranks resolved trades by their stored expected_value.expected_r
+    (V2.1-A, computed once at issuance) against what actually happened —
+    the same "does score agree with EV" question Section 4 of the V2.1
+    forensic report answered by hand, kept live here as new trades
+    resolve. Only trades issued after V2.1-A shipped have this field."""
+    rows = [r for r in _traded_rows() if r.expected_value and r.expected_value.get("expected_r") is not None]
+    if len(rows) < min_sample:
+        return {"n": len(rows), "note": f"Fewer than {min_sample} trades have a stored expected_value yet.", "trades": []}
+
+    def _realized_r(r: TradeOutcome) -> float | None:
+        rr = (r.entry_indicators or {}).get("risk_reward") or {}
+        risk_pct = rr.get("risk_to_sl_pct")
+        if not risk_pct or r.realized_return_pct is None:
+            return None
+        return round(r.realized_return_pct / risk_pct, 3)
+
+    entries = []
+    for r in rows:
+        entries.append({
+            "symbol": r.symbol, "score": r.score, "expected_r": r.expected_value["expected_r"],
+            "realized_r": _realized_r(r), "status": r.status,
+            "conditioning_used": r.expected_value.get("conditioning_used"),
+            "sample_size": r.expected_value.get("sample_size"),
+        })
+    entries.sort(key=lambda e: -e["expected_r"])
+
+    scores = [e["score"] for e in entries]
+    evs = [e["expected_r"] for e in entries]
+    corr = None
+    if len(entries) >= 3:
+        try:
+            import statistics
+            corr = round(statistics.correlation(scores, evs), 3)
+        except Exception:
+            corr = None
+
+    return {
+        "n": len(entries), "corr_score_vs_expected_r": corr,
+        "avg_expected_r": _avg(evs), "avg_realized_r": _avg([e["realized_r"] for e in entries]),
+        "ranked_by_expected_r": entries,
+    }
+
+
+def red_flag_leaderboard() -> dict:
+    """Win rate and avg return by red_flag_score (V2.1-C, 0-3 flags
+    triggered at issuance) — only trades issued after V2.1-C shipped have
+    this field. Purely observational, same as red_flags.py itself."""
+    rows = [r for r in _traded_rows() if r.red_flags is not None]
+    if not rows:
+        return {"n": 0, "note": "No trades have a stored red_flags value yet."}
+
+    buckets = {}
+    for score in range(0, 4):
+        sub = [r for r in rows if r.red_flags.get("red_flag_score") == score]
+        if not sub:
+            continue
+        w = [r for r in sub if r.status == "closed_win"]
+        buckets[score] = {
+            "n": len(sub), "win_rate_pct": _pct(len(w), len(sub)),
+            "avg_return_pct": _avg([r.realized_return_pct for r in sub]),
+        }
+    return {"n": len(rows), "by_red_flag_score": buckets}
+
+
 def open_trade_management_analytics() -> dict:
     session = SessionLocal()
     try:

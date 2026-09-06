@@ -8,7 +8,9 @@ see that module's own docstring for the full contract.
 
 from fastapi import APIRouter, HTTPException
 
+from app.engine import calibration
 from app.engine import performance_center as pc
+from app.engine import trade_reports
 
 router = APIRouter()
 
@@ -65,3 +67,37 @@ async def trade_manager():
     change since entry, and a suggested Hold/Move Stop/Exit
     Partial/Exit Full recommendation. Nothing here executes anything."""
     return pc.open_trade_management_analytics()
+
+
+# ---------------------------------------------------------------------------
+# Karma V2.1 Phase 7 additions
+# ---------------------------------------------------------------------------
+
+@router.get("/performance/calibration-table")
+async def calibration_table(min_sample: int = 5):
+    """V2.1 Phase 4: confidence-bucket calibration table (predicted vs
+    observed win rate, 95% CI) — see app/engine/calibration.py."""
+    return calibration.calibration_table(min_sample=min_sample)
+
+
+@router.get("/performance/ev-leaderboard")
+async def ev_leaderboard(min_sample: int = 1):
+    """V2.1 Phase 1/7: ranks resolved trades by their stored
+    expected_value.expected_r against what actually happened, and reports
+    corr(score, expected_r) — the same score-vs-EV disagreement check from
+    the V2.1 forensic report, kept live as new trades resolve."""
+    return pc.ev_leaderboard(min_sample=min_sample)
+
+
+@router.get("/performance/red-flag-leaderboard")
+async def red_flag_leaderboard():
+    """V2.1 Phase 6/7: win rate and avg return by red_flag_score (0-3)."""
+    return pc.red_flag_leaderboard()
+
+
+@router.get("/performance/feature-importance")
+async def feature_importance(min_sample: int = 20, limit: int | None = None):
+    """Reuses trade_reports.py's existing feature_importance() rather than
+    duplicating it — this route just exposes it under /performance for
+    Phase 7's requested dashboard surface."""
+    return trade_reports.feature_importance(min_sample=min_sample, limit=limit)
