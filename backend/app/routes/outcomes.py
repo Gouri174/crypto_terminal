@@ -74,6 +74,10 @@ def _serialize(row: TradeOutcome) -> dict:
         "tp1_hit_at": row.tp1_hit_at,
         "tp2_hit_at": row.tp2_hit_at,
         "tp3_hit_at": row.tp3_hit_at,
+        "level_reasoning": row.level_reasoning,
+        # Karma V2.1 Phase 1 — shown BESIDE score/confidence, never in
+        # place of them. NULL on trades issued before this shipped.
+        "expected_value": row.expected_value,
     }
 
 

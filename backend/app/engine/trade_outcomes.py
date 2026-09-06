@@ -20,6 +20,7 @@ from sqlalchemy import func, select
 
 from app.db import SessionLocal
 from app.engine.entry_flags import classify_market_cluster, compute_diagnostic_flags, compute_risk_reward
+from app.engine.expected_value import compute_expected_value
 from app.engine.reasoning import PROMPT_VERSION
 from app.engine.scoring import SCORE_FORMULA_VERSION
 from app.models.db_models import PredictionSnapshot, TradeOutcome
@@ -307,6 +308,10 @@ def open_trade_outcome(
             entry_quality_reasons=entry_quality_reasons,
             diagnostic_flags=diagnostic_flags,
             level_reasoning=_capture_level_reasoning(plan, features, plan.recommendation),
+            expected_value=compute_expected_value(
+                risk_reward, direction=plan.recommendation,
+                entry_quality=entry_quality, market_regime=(regime or {}).get("label"),
+            ),
         )
         session.add(row)
         session.commit()

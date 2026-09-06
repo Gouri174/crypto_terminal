@@ -297,6 +297,17 @@ class TradeOutcome(Base):
     # duplicated here.
     level_reasoning: Mapped[dict | None] = mapped_column(JSON, nullable=True)
 
+    # Karma V2.1 Phase 1 (app/engine/expected_value.py) — computed ONCE at
+    # issuance from resolved-trade FREQUENCY TABLES (never a trained
+    # model, never Claude), using whatever direction/entry_quality/regime
+    # conditioning has >= min_sample history at that moment (with
+    # automatic backoff to a coarser conditioning when it doesn't).
+    # Deliberately additive: does not replace `score`/`confidence`, does
+    # not feed back into ranking or gating. NULL on every trade issued
+    # before this shipped — not backfilled, same as every other V1.1+
+    # capture field on this table.
+    expected_value: Mapped[dict | None] = mapped_column(JSON, nullable=True)
+
 
 class PredictionSnapshot(Base):
     """One deterministic validation check of an OPEN TradeOutcome, recorded
