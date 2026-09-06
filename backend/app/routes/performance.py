@@ -8,7 +8,7 @@ see that module's own docstring for the full contract.
 
 from fastapi import APIRouter, HTTPException
 
-from app.analytics import decision_audit, karma_explain, position_sizing, strategy_attribution, trade_quality
+from app.analytics import decision_audit, karma_explain, missed_opportunity, position_sizing, strategy_attribution, trade_quality
 from app.engine import calibration
 from app.engine import performance_center as pc
 from app.engine import trade_reports
@@ -193,3 +193,14 @@ async def strategy_leaderboard(min_sample: int = 3):
     the honest disclosure of which categories are approximated proxies
     (this codebase has no per-trade BOS/CHoCH boolean)."""
     return strategy_attribution.strategy_leaderboard(min_sample=min_sample)
+
+
+@router.get("/performance/missed-opportunity-status")
+async def missed_opportunity_status():
+    """RECORDER progress only — see app/analytics/missed_opportunity.py.
+    Refuses to report a rate/conclusion below 500 resolved rows, per
+    explicit instruction. Recording isn't wired into the live scan loop
+    yet (that needs a small addition to background_scanner.py, which is
+    under this session's 30-day freeze) — this reports whatever has been
+    recorded manually/independently so far."""
+    return missed_opportunity.missed_opportunity_summary()

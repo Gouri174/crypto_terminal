@@ -487,3 +487,52 @@ class ScanSnapshot(Base):
     # cycle (entry/stop/tp1 exist to compute a ratio from) — null otherwise,
     # never estimated for a candidate that was never given levels.
     risk_reward_tp1: Mapped[float | None] = mapped_column(Float, nullable=True)
+
+
+class RejectedOpportunityOutcome(Base):
+    """Karma V3.1 — Missed Opportunity recorder ONLY (per explicit
+    instruction: "build only the recorder... don't build analytics until
+    500-1000 rejected scans accumulate"). One row per rejected ScanSnapshot
+    candidate (late/exhausted/no_trade/rank-cutoff), tracking price at
+    rejection and at three later check-ins so a future analysis can ask
+    "did the direction move favorably after rejection" — WITHOUT
+    fabricating a hypothetical TP1/TP2/TP3 outcome, which isn't computable
+    for a rejected candidate (it never received Claude-generated levels).
+
+    This tracks DIRECTIONAL price movement only (using the deterministic
+    `direction` already computed for every scanned symbol, accepted or
+    not — see decision.py:decide_direction) as an honest proxy for "would
+    this have been a reasonable trade," not a literal TP/SL replay.
+
+    Not yet wired into background_scanner.py's scan loop — creating rows
+    requires a call at rejection time, which needs a small addition to
+    that file (frozen this session); check_in wiring is a separate,
+    explicit decision (see app/analytics/missed_opportunity.py's module
+    docstring).
+    """
+
+    __tablename__ = "rejected_opportunity_outcomes"
+    __table_args__ = (
+        Index("ix_rejected_opp_symbol", "symbol"),
+        Index("ix_rejected_opp_rejected_at", "rejected_at"),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    scan_snapshot_id: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    symbol: Mapped[str] = mapped_column(String(20))
+    direction: Mapped[str] = mapped_column(String(10))  # "long" | "short" — never "no_trade" (nothing to measure)
+    rejection_reason: Mapped[str] = mapped_column(String(200))
+    rejected_at: Mapped[int] = mapped_column(Integer)  # epoch ms
+    price_at_rejection: Mapped[float] = mapped_column(Float)
+
+    price_at_4h: Mapped[float | None] = mapped_column(Float, nullable=True)
+    price_at_24h: Mapped[float | None] = mapped_column(Float, nullable=True)
+    price_at_72h: Mapped[float | None] = mapped_column(Float, nullable=True)
+    # Sign-adjusted % move in the REJECTED candidate's own predicted
+    # direction — positive means price moved the way this setup would
+    # have wanted, negative means it moved against it. Not a win/loss
+    # label (no TP/SL exists to grade against for a rejected candidate).
+    directional_move_4h_pct: Mapped[float | None] = mapped_column(Float, nullable=True)
+    directional_move_24h_pct: Mapped[float | None] = mapped_column(Float, nullable=True)
+    directional_move_72h_pct: Mapped[float | None] = mapped_column(Float, nullable=True)
+    resolved: Mapped[bool] = mapped_column(Boolean, default=False)  # True once the 72h check-in is filled
