@@ -4,6 +4,7 @@ from fastapi import APIRouter, Query
 from sqlalchemy import select
 
 from app.db import SessionLocal
+from app.analytics.direction_badge import direction_badge
 from app.engine.calibration import range_display
 from app.engine.trade_reports import (
     confidence_calibration,
@@ -86,6 +87,8 @@ def _serialize(row: TradeOutcome) -> dict:
         # Karma V3.3-A — range-based observed-probability display (cached blocks,
         # recomputed at most once a minute); display only, never fed back.
         "confidence_display": range_display(row.confidence),
+        # Karma V3.3-E - informational badge for shorts only (None for longs); never gates a trade.
+        "direction_badge": direction_badge(row.direction),
     }
 
 
