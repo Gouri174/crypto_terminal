@@ -1,0 +1,355 @@
+<title>Karma Archive Backend</title>
+<style>
+  :root {
+    --bg: #100e0c;
+    --surface: #1a1713;
+    --surface-2: #211d18;
+    --border: #37312a;
+    --text: #ece6da;
+    --text-dim: #a89e8e;
+    --text-faint: #746b5d;
+    --accent: #d1a35c;
+    --accent-dim: #8a744a;
+    --good: #6fae7c;
+    --warning: #d1a35c;
+    --critical: #c96a5a;
+    --mono: "IBM Plex Mono", ui-monospace, monospace;
+    --sans: "IBM Plex Sans", system-ui, sans-serif;
+    --display: "Fraunces", Georgia, serif;
+  }
+  @media (prefers-color-scheme: light) {
+    :root:not([data-theme="light"]) {
+      --bg: #faf7f1;
+      --surface: #ffffff;
+      --surface-2: #f2ede2;
+      --border: #ddd3c1;
+      --text: #24201a;
+      --text-dim: #6b6152;
+      --text-faint: #948a78;
+      --accent: #9c6e2c;
+      --accent-dim: #b98c4a;
+      --good: #3f7a4d;
+      --warning: #9c6e2c;
+      --critical: #a3402f;
+    }
+  }
+  :root[data-theme="light"] {
+    --bg: #faf7f1;
+    --surface: #ffffff;
+    --surface-2: #f2ede2;
+    --border: #ddd3c1;
+    --text: #24201a;
+    --text-dim: #6b6152;
+    --text-faint: #948a78;
+    --accent: #9c6e2c;
+    --accent-dim: #b98c4a;
+    --good: #3f7a4d;
+    --warning: #9c6e2c;
+    --critical: #a3402f;
+  }
+  :root[data-theme="dark"] {
+    --bg: #100e0c;
+    --surface: #1a1713;
+    --surface-2: #211d18;
+    --border: #37312a;
+    --text: #ece6da;
+    --text-dim: #a89e8e;
+    --text-faint: #746b5d;
+    --accent: #d1a35c;
+    --accent-dim: #8a744a;
+    --good: #6fae7c;
+    --warning: #d1a35c;
+    --critical: #c96a5a;
+  }
+
+  * { box-sizing: border-box; }
+  body {
+    background: var(--bg);
+    color: var(--text);
+    font-family: var(--sans);
+    font-size: 15.5px;
+    line-height: 1.6;
+    margin: 0;
+  }
+  h1, h2, h3 { font-family: var(--display); text-wrap: balance; font-weight: 600; }
+  code, .mono { font-family: var(--mono); }
+
+  a { color: var(--accent); }
+
+  .shell { max-width: 1080px; margin: 0 auto; padding: 56px 32px 96px; }
+
+  header.top {
+    display: flex; flex-direction: column; gap: 10px;
+    padding-bottom: 36px; margin-bottom: 40px;
+    border-bottom: 1px solid var(--border);
+  }
+  .eyebrow {
+    font-family: var(--mono); font-size: 11.5px; letter-spacing: 0.14em;
+    text-transform: uppercase; color: var(--accent);
+  }
+  h1.title { font-size: 40px; margin: 0; letter-spacing: -0.01em; }
+  .subtitle { color: var(--text-dim); font-size: 16.5px; max-width: 62ch; margin: 4px 0 0; }
+  .meta-row {
+    display: flex; gap: 20px; flex-wrap: wrap; margin-top: 18px;
+    font-family: var(--mono); font-size: 12.5px; color: var(--text-faint);
+  }
+  .meta-row span b { color: var(--text-dim); font-weight: 500; }
+
+  nav.toc {
+    display: grid; grid-template-columns: repeat(auto-fill, minmax(190px, 1fr));
+    gap: 8px; margin: 28px 0 0;
+  }
+  nav.toc a {
+    display: block; padding: 10px 14px; border: 1px solid var(--border);
+    border-radius: 4px; background: var(--surface); color: var(--text);
+    text-decoration: none; font-size: 13px;
+  }
+  nav.toc a:hover { border-color: var(--accent-dim); }
+  nav.toc a span { display: block; color: var(--text-faint); font-family: var(--mono); font-size: 10.5px; margin-top: 2px; }
+
+  section.block { margin-top: 64px; }
+  section.block > h2 {
+    font-size: 24px; margin: 0 0 6px; display: flex; align-items: baseline; gap: 12px;
+  }
+  section.block > h2 .num { font-family: var(--mono); color: var(--accent); font-size: 15px; }
+  section.block > p.lede { color: var(--text-dim); max-width: 68ch; margin: 0 0 28px; }
+
+  .card {
+    background: var(--surface); border: 1px solid var(--border); border-radius: 6px;
+    padding: 20px 22px; margin-bottom: 14px;
+  }
+  .card h3 { font-size: 16px; margin: 0 0 6px; font-family: var(--sans); font-weight: 600; }
+  .card p { margin: 0 0 10px; color: var(--text-dim); font-size: 14px; }
+  .card p:last-child { margin-bottom: 0; }
+
+  .endpoint-group { margin-bottom: 30px; }
+  .endpoint-group h3 {
+    font-size: 13px; text-transform: uppercase; letter-spacing: 0.08em;
+    color: var(--text-faint); margin: 0 0 12px; font-weight: 600; font-family: var(--sans);
+  }
+  .endpoint {
+    display: grid; grid-template-columns: minmax(220px, 340px) 1fr;
+    gap: 16px; padding: 12px 0; border-bottom: 1px solid var(--border);
+    align-items: start;
+  }
+  .endpoint:last-child { border-bottom: none; }
+  .endpoint .path {
+    font-family: var(--mono); font-size: 12.5px; color: var(--accent);
+    word-break: break-all;
+  }
+  .endpoint .path .verb {
+    display: inline-block; color: var(--good); margin-right: 8px; font-weight: 600;
+  }
+  .endpoint .desc { font-size: 13.5px; color: var(--text-dim); }
+  .endpoint .desc code { background: var(--surface-2); padding: 1px 5px; border-radius: 3px; font-size: 12px; color: var(--text); }
+
+  table.spec { width: 100%; border-collapse: collapse; margin: 16px 0; font-size: 13.5px; }
+  table.spec th, table.spec td {
+    text-align: left; padding: 9px 12px; border-bottom: 1px solid var(--border);
+  }
+  table.spec th {
+    color: var(--text-faint); font-weight: 600; font-size: 11.5px;
+    text-transform: uppercase; letter-spacing: 0.05em;
+  }
+  table.spec td.mono { color: var(--text-dim); }
+  .tag {
+    display: inline-block; font-family: var(--mono); font-size: 11px;
+    padding: 2px 8px; border-radius: 20px; border: 1px solid currentColor;
+  }
+  .tag.frozen { color: var(--critical); }
+  .tag.additive { color: var(--good); }
+
+  .limitation {
+    border-left: 3px solid var(--warning); padding: 4px 0 4px 16px; margin: 10px 0;
+    font-size: 13.5px; color: var(--text-dim);
+  }
+  .limitation b { color: var(--text); }
+
+  .commit-list { display: flex; flex-direction: column; gap: 0; }
+  .commit {
+    display: grid; grid-template-columns: 90px 1fr; gap: 16px;
+    padding: 11px 0; border-bottom: 1px solid var(--border); font-size: 13.5px;
+  }
+  .commit:last-child { border-bottom: none; }
+  .commit .sha { font-family: var(--mono); color: var(--accent-dim); }
+  .commit .msg { color: var(--text-dim); }
+  .commit .msg b { color: var(--text); font-weight: 600; }
+
+  .frozen-list {
+    display: flex; flex-wrap: wrap; gap: 8px; margin: 14px 0;
+  }
+  .frozen-list code {
+    font-family: var(--mono); font-size: 12.5px; background: var(--surface);
+    border: 1px solid var(--critical); color: var(--critical);
+    padding: 4px 10px; border-radius: 4px;
+  }
+
+  .callout {
+    background: var(--surface-2); border: 1px solid var(--border); border-radius: 6px;
+    padding: 20px 24px; margin: 20px 0;
+  }
+  .callout h4 { margin: 0 0 8px; font-size: 14px; font-family: var(--sans); }
+  .callout p { margin: 0; color: var(--text-dim); font-size: 13.5px; }
+
+  footer.page-footer {
+    margin-top: 72px; padding-top: 24px; border-top: 1px solid var(--border);
+    color: var(--text-faint); font-size: 12.5px; font-family: var(--mono);
+  }
+
+  @media (max-width: 640px) {
+    .shell { padding: 32px 18px 64px; }
+    h1.title { font-size: 30px; }
+    .endpoint { grid-template-columns: 1fr; }
+  }
+</style>
+
+<div class="shell">
+
+  <header class="top">
+    <div class="eyebrow">Backend reference — read-only analytics layer</div>
+    <h1 class="title">Karma Archive</h1>
+    <p class="subtitle">A crypto trading analysis platform built from 0 → 90+ resolved live trades: a deterministic scoring/decision engine, Claude-generated trade plans, and — this document's focus — the analytics, explainability, and trade-management layer built on top of it across four release rounds (V2.1 → V3.2).</p>
+    <div class="meta-row">
+      <span><b>Repo</b> crypto-terminal / backend</span>
+      <span><b>Commits this arc</b> 10 (c511b3e → ffb009d)</span>
+      <span><b>Routes documented</b> 30</span>
+      <span><b>Status</b> pushed to origin/master</span>
+    </div>
+    <nav class="toc">
+      <a href="#architecture"><b>Architecture</b><span>frozen vs additive</span></a>
+      <a href="#reference"><b>API reference</b><span>30 routes, grouped</span></a>
+      <a href="#limitations"><b>Known limitations</b><span>proxies, disclosed</span></a>
+      <a href="#history"><b>Build history</b><span>10 commits</span></a>
+      <a href="#running"><b>Running it</b><span>local setup</span></a>
+    </nav>
+  </header>
+
+  <section class="block" id="architecture">
+    <h2><span class="num">01</span> Architecture &amp; constraints</h2>
+    <p class="lede">Every module documented below is additive: it reads already-stored data and computes statistics, suggestions, or narrative — nothing here changes which trades get taken, how they're scored, or what Claude is asked to decide.</p>
+
+    <div class="card">
+      <h3>The hard freeze</h3>
+      <p>These files decide trades and are untouched by everything in this document — verified with <code>git diff --stat</code> before every commit in this arc:</p>
+      <div class="frozen-list">
+        <code>scoring.py</code>
+        <code>decision.py</code>
+        <code>market_regime.py</code>
+        <code>reasoning.py</code> (prompt)
+        <code>ml_model.py</code> (weights/training)
+        <code>confidence.py</code>
+        <code>entry_quality.py</code>
+        <code>lifecycle.py</code>
+        <code>background_scanner.py</code>
+      </div>
+      <p>One exception exists in the record, on the record: a commit briefly changed <code>scoring.py</code>'s momentum/volume/structure weights from odds-ratio evidence, then reverted them in the very next commit — measurement and implementation had been folded into one pass without a separate sign-off step. The revert and the reasoning are both in the git history (<code>901580f</code> → <code>d44bd96</code>).</p>
+    </div>
+
+    <div class="card">
+      <h3>What's new instead</h3>
+      <p>A new <code>app/analytics/</code> package (12 modules) plus extensions to <code>app/engine/performance_center.py</code> — Expected Value, Trade Manager probabilities, Confidence Calibration, Red Flags, Failure Patterns, Symbol Reliability, Trade Quality, Karma Explain, Decision Audit, Strategy Attribution, Trade Truth verdicts, Prediction Version Metadata, Market Health, Portfolio Exposure, Daily Scorecards, a Missed-Opportunity recorder, Trade Journal, and a Calibration Dashboard.</p>
+      <p>No ML retraining, no automated weight optimizer, no coin-specific models — deferred until the resolved-trade count clears the thresholds each report below states, not tuned on the current sample.</p>
+    </div>
+  </section>
+
+  <section class="block" id="reference">
+    <h2><span class="num">02</span> API reference</h2>
+    <p class="lede">All under <code>/api/performance/*</code> unless noted. Full interactive docs (try each call against live data): <code>/docs</code> on the running server.</p>
+
+    <div class="endpoint-group">
+      <h3>Core performance analytics</h3>
+      <div class="endpoint"><div class="path"><span class="verb">GET</span>/scanner-health</div><div class="desc">Heartbeat timeline, outage detection, uptime %. Surfaced two real multi-day monitoring gaps that explained the worst historical stop-slippage losses.</div></div>
+      <div class="endpoint"><div class="path"><span class="verb">GET</span>/stop-execution</div><div class="desc">Slippage distribution by direction, symbol, ATR-volatility bucket, and during-outage vs. normal uptime.</div></div>
+      <div class="endpoint"><div class="path"><span class="verb">GET</span>/tp-continuation</div><div class="desc">P(TP2|TP1), P(TP3|TP2), return-to-entry / return-to-stop probabilities from real snapshot price paths.</div></div>
+      <div class="endpoint"><div class="path"><span class="verb">GET</span>/confidence-lab</div><div class="desc">Confidence-bucket win rates, Brier score, Expected Calibration Error.</div></div>
+      <div class="endpoint"><div class="path"><span class="verb">GET</span>/coin-leaderboard</div><div class="desc">Per-symbol PF / win rate / return / MFE-MAE, gated behind a minimum sample.</div></div>
+      <div class="endpoint"><div class="path"><span class="verb">GET</span>/trade-replay/{id}</div><div class="desc">Full per-trade payload: entry indicators, Claude's reasoning, snapshot timeline, TP/SL events, exit reason, plus a plain-English <code>narrative</code> and forensic <code>pattern</code> match.</div></div>
+      <div class="endpoint"><div class="path"><span class="verb">GET</span>/trade-manager</div><div class="desc">Every open trade's distance-to-target, confidence/structure/regime drift since entry, and a Hold / Move-Stop / Exit suggestion with <code>conditional_triggers</code>.</div></div>
+    </div>
+
+    <div class="endpoint-group">
+      <h3>Expected value &amp; risk</h3>
+      <div class="endpoint"><div class="path"><span class="verb">GET</span>/calibration-table</div><div class="desc">Predicted vs. observed win rate per confidence bucket with a 95% Wilson CI.</div></div>
+      <div class="endpoint"><div class="path"><span class="verb">GET</span>/ev-leaderboard</div><div class="desc">Ranks resolved trades by stored <code>expected_r</code> against what actually happened; reports <code>corr(score, expected_r)</code>.</div></div>
+      <div class="endpoint"><div class="path"><span class="verb">GET</span>/red-flag-leaderboard</div><div class="desc">Win rate / return by red-flag count (0–3): RSI chop-zone, weak structure, no historical analogue.</div></div>
+      <div class="endpoint"><div class="path"><span class="verb">GET</span>/feature-importance</div><div class="desc">Existing per-component win-rate lift report, exposed here alongside the rest.</div></div>
+      <div class="endpoint"><div class="path"><span class="verb">GET</span>/position-size</div><div class="desc">Pure arithmetic — capital / risk % / stop distance → position size and max dollar loss. Never places an order.</div></div>
+    </div>
+
+    <div class="endpoint-group">
+      <h3>Pattern &amp; reliability</h3>
+      <div class="endpoint"><div class="path"><span class="verb">GET</span>/failure-patterns</div><div class="desc">Every resolved loss classified into a lifecycle pattern plus risk tags — only patterns with real occurrences are ever reported.</div></div>
+      <div class="endpoint"><div class="path"><span class="verb">GET</span>/coin-reliability</div><div class="desc">Bayesian-shrunk (Beta-Binomial) per-symbol reliability score — a 100%-on-2-trades symbol shrinks toward the pooled rate instead of looking falsely excellent.</div></div>
+    </div>
+
+    <div class="endpoint-group">
+      <h3>Trade intelligence &amp; explainability</h3>
+      <div class="endpoint"><div class="path"><span class="verb">GET</span>/trade-quality/{id}</div><div class="desc">0–100 composite: 30% entry quality + 20% EV + 15% reliability + 15% calibration + 10% structure + 10% (inverted red flags). Fixed formula, not ML-tuned.</div></div>
+      <div class="endpoint"><div class="path"><span class="verb">GET</span>/confidence-display</div><div class="desc">"71 raw / 58 calibrated ±10%, n=22" — reliability-adjusted confidence with real uncertainty.</div></div>
+      <div class="endpoint"><div class="path"><span class="verb">GET</span>/explain/{id}</div><div class="desc"><b>Karma Explain</b> — bullish/risk evidence, historical similarity, reliability, EV, and (for open trades) an action plan. Pure synthesis, nothing new computed.</div></div>
+      <div class="endpoint"><div class="path"><span class="verb">GET</span>/decision-audit</div><div class="desc">accepted_because / rejected_checks / warnings per trade — reruns <code>decision.py</code>'s own unmodified checklist against stored score breakdowns.</div></div>
+      <div class="endpoint"><div class="path"><span class="verb">GET</span>/strategy-attribution</div><div class="desc">Classifies every trade into one strategy family (FVG continuation, breakout chase, mean reversion, EMA pullback, …) from already-stored fields.</div></div>
+    </div>
+
+    <div class="endpoint-group">
+      <h3>Trading operating system (V3.2)</h3>
+      <div class="endpoint"><div class="path"><span class="verb">GET</span>/trade-truth / /trade-truth/{id}</div><div class="desc"><b>Trade Truth Engine</b> — forensic verdicts beyond win/loss: <code>perfect_trade</code>, <code>good_entry_bad_exit</code>, <code>bad_structure_call</code>, <code>infrastructure_failure</code>, <code>near_miss_early_stop</code>, and more.</div></div>
+      <div class="endpoint"><div class="path"><span class="verb">GET</span>/prediction-versions</div><div class="desc">Win rate / PF grouped by <code>prediction_version</code> — the "did V4 outperform V3" question, ready once a version actually changes.</div></div>
+      <div class="endpoint"><div class="path"><span class="verb">GET</span>/market-health</div><div class="desc">0–100 "is today worth trading" score from regime, breadth, Fear &amp; Greed, and today's scan breakdown.</div></div>
+      <div class="endpoint"><div class="path"><span class="verb">GET</span>/portfolio-exposure</div><div class="desc">Long/short balance, symbol-family concentration, and a suggested max additional trades — across currently open positions only.</div></div>
+      <div class="endpoint"><div class="path"><span class="verb">GET</span>/daily-scorecard/morning</div><div class="desc">Market health + 24h scanner funnel + portfolio health + top EV opportunities, assembled into one morning brief.</div></div>
+      <div class="endpoint"><div class="path"><span class="verb">GET</span>/daily-scorecard/evening</div><div class="desc">Today's performance digest, truth-verdict breakdown, best/worst strategy.</div></div>
+      <div class="endpoint"><div class="path"><span class="verb">GET</span>/missed-opportunity-status / -breakdown</div><div class="desc">Recorder progress for rejected candidates' directional outcome — refuses to report a rate below 500 resolved rows.</div></div>
+      <div class="endpoint"><div class="path"><span class="verb">GET</span>/trade-journal/{id}</div><div class="desc">Strengths / mistakes / repeated pattern / analogue / recommendation — a journal entry synthesized from Karma Explain + Trade Truth.</div></div>
+      <div class="endpoint"><div class="path"><span class="verb">GET</span>/calibration-dashboard</div><div class="desc">Confidence curve + Brier/ECE + TP-continuation calibration + EV calibration, in one payload.</div></div>
+    </div>
+  </section>
+
+  <section class="block" id="limitations">
+    <h2><span class="num">03</span> Known limitations — disclosed, not hidden</h2>
+    <p class="lede">Every proxy below exists because the real data doesn't: this project's own standing rule is to report "unavailable" rather than fabricate a plausible-looking number.</p>
+
+    <div class="limitation"><b>BTC correlation</b> is a symbol-family concentration proxy, not a computed price correlation — only 6 symbols in the database have any OHLCV history at all.</div>
+    <div class="limitation"><b>Volatility Quality &amp; News Stress</b> (Market Health components) are proxied via the average risk-penalty score and reported as unavailable, respectively — no aggregate ATR-percentile or pooled news-stress metric exists in this codebase yet.</div>
+    <div class="limitation"><b><code>late_entry</code></b> exists in the Trade Truth taxonomy but structurally can't be assigned — <code>entry_quality="late"</code> blocks a new trade from ever being created in the first place.</div>
+    <div class="limitation"><b><code>near_miss_early_stop</code></b> replaces a literal "stopped, then price hit TP1 anyway" verdict, which isn't observable — this app stops tracking price the moment a trade closes. The verdict instead reports how close price got (≥80% of the distance to TP1) before reversing.</div>
+    <div class="limitation"><b>Order-block detection</b> doesn't exist anywhere in this codebase — only swing points, BOS, CHoCH, and FVG. Strategy Attribution and Decision Audit report this honestly rather than inferring a false match.</div>
+    <div class="limitation"><b>Missed Opportunity</b> tracks directional price movement only, never a literal TP1/TP2/TP3 outcome — a rejected candidate never received Claude-generated levels to grade against.</div>
+  </section>
+
+  <section class="block" id="history">
+    <h2><span class="num">04</span> Build history</h2>
+    <p class="lede">10 commits, each independently tested and verified against the frozen-file list before merging.</p>
+    <div class="commit-list">
+      <div class="commit"><span class="sha mono">c511b3e</span><span class="msg"><b>V2.1-A</b> — Expected Value engine (frequency tables, not a trained model)</span></div>
+      <div class="commit"><span class="sha mono">6bdfc1f</span><span class="msg"><b>V2.1-B</b> — TP Continuation Engine / Trade Manager</span></div>
+      <div class="commit"><span class="sha mono">901580f</span><span class="msg"><b>V2.1-C</b> — Score weight recalibration + Red Flag engine</span></div>
+      <div class="commit"><span class="sha mono">17b61ff</span><span class="msg"><b>V2.1-D</b> — Confidence calibration</span></div>
+      <div class="commit"><span class="sha mono">e833491</span><span class="msg"><b>V2.1-E</b> — Analytics dashboard additions</span></div>
+      <div class="commit"><span class="sha mono">d44bd96</span><span class="msg">Reverted V2.1-C's scoring.py weights; replaced with a measurement-only report</span></div>
+      <div class="commit"><span class="sha mono">42c948d</span><span class="msg"><b>V3.0</b> — Failure Pattern Engine, Symbol Reliability, Position Sizing</span></div>
+      <div class="commit"><span class="sha mono">fa1d4e2</span><span class="msg"><b>V3.1</b> — Trade Quality Score, Karma Explain, Decision Audit, Strategy Attribution</span></div>
+      <div class="commit"><span class="sha mono">f96e47a</span><span class="msg"><b>V3.1</b> — Missed Opportunity recorder (recording only)</span></div>
+      <div class="commit"><span class="sha mono">ffb009d</span><span class="msg"><b>V3.2</b> — Trade Truth, Prediction Metadata, Market Health, Portfolio Exposure, Daily Scorecard, Journal, Calibration Dashboard</span></div>
+    </div>
+    <div class="callout">
+      <h4>Test coverage</h4>
+      <p>15 manual verification scripts (no pytest infra in this project — see <code>test_trade_outcomes.py</code> for the established pattern), run against the real dev database using clearly-fake symbols, cleaning up after themselves. All passing as of the last commit.</p>
+    </div>
+  </section>
+
+  <section class="block" id="running">
+    <h2><span class="num">05</span> Running it locally</h2>
+    <table class="spec">
+      <tr><th>Backend</th><td class="mono">cd backend<br>.venv\Scripts\Activate.ps1<br>uvicorn app.main:app --reload --port 8000</td></tr>
+      <tr><th>Frontend</th><td class="mono">cd frontend<br>npm run dev</td></tr>
+      <tr><th>Interactive docs</th><td class="mono">http://localhost:8000/docs</td></tr>
+      <tr><th>App</th><td class="mono">http://localhost:3000</td></tr>
+    </table>
+  </section>
+
+  <footer class="page-footer">
+    Karma Archive — backend reference · generated from the live codebase and commit history · crypto-terminal/backend
+  </footer>
+
+</div>
