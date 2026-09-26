@@ -4,6 +4,7 @@ from fastapi import APIRouter, Query
 from sqlalchemy import select
 
 from app.db import SessionLocal
+from app.engine.calibration import range_display
 from app.engine.trade_reports import (
     confidence_calibration,
     entry_quality_performance,
@@ -82,6 +83,9 @@ def _serialize(row: TradeOutcome) -> dict:
         "red_flags": row.red_flags,
         # Karma V2.1 Phase 4 — shown BESIDE raw `confidence`, never replacing it.
         "calibrated_confidence": row.calibrated_confidence,
+        # Karma V3.3-A — range-based observed-probability display (cached blocks,
+        # recomputed at most once a minute); display only, never fed back.
+        "confidence_display": range_display(row.confidence),
     }
 
 

@@ -135,4 +135,117 @@ def confidence_display(raw_confidence: int | None, min_sample: int = MIN_SAMPLE)
         "sample_size": result["sample_size"],
         "confidence_bucket": result["confidence_bucket"],
         "note": result["note"],
+        # V3.3-A: what a UI should actually show (ranges, not per-point precision).
+        # The keys above are the legacy per-5-point-bucket view, kept for
+        # backward compatibility; they are non-monotone and over-precise.
+        "display": range_display(raw_confidence),
+    }
+
+
+# ---------------------------------------------------------------------------
+# Karma V3.3-A — honest RANGE display (display only; never feeds scoring).
+#
+# Evidence (karma_v3_plan.md Part 3, 118 resolved trades): observed win rate is
+# NOT monotone in raw confidence (55-59: 32%, 60-64: 46%, 65-69: 38%,
+# 70-74: 33%), and on a chronological hold-out every mapping that used the
+# rank of confidence lost to a constant at the base rate. Showing a different
+# precise percentage per point (63 -> 40.8%, 64 -> 41.2%) would therefore be
+# false precision. So: pool-adjacent-violators over the 5-point buckets
+# collapses the data into the fewest monotone RANGES it can support, and the
+# display shows the pooled observed rate + interval + sample size for the
+# range the raw confidence falls in — never a per-point number.
+# ---------------------------------------------------------------------------
+
+RANGE_MIN_BLOCK_N = 20
+_RANGE_LOW_KEY = 45    # everything below 50 is pooled into the lowest key
+_RANGE_HIGH_KEY = 70   # 70-74 and 75+ share one key (75+ has ~1 trade)
+_range_cache: dict = {"ts": 0.0, "blocks": None}
+_RANGE_CACHE_TTL_SECONDS = 60
+
+
+def _range_key(confidence: float) -> int:
+    return int(min(max(confidence // 5 * 5, _RANGE_LOW_KEY), _RANGE_HIGH_KEY))
+
+
+def build_range_blocks(pairs: list[tuple[float, bool]]) -> list[dict]:
+    """pairs = [(raw_confidence, won)]. Returns monotone non-decreasing
+    blocks [{'lo_key','hi_key','wins','n'}] by pool-adjacent-violators
+    over the 5-point buckets. Pure function (no DB) so it is testable."""
+    grp: dict[int, list[int]] = {}
+    for conf, won in pairs:
+        k = _range_key(conf)
+        w, n = grp.get(k, (0, 0))
+        grp[k] = [w + (1 if won else 0), n + 1]
+    keys = sorted(grp)
+    blocks = [{"lo_key": k, "hi_key": k, "wins": grp[k][0], "n": grp[k][1]} for k in keys]
+    i = 0
+    while i < len(blocks) - 1:
+        a, b = blocks[i], blocks[i + 1]
+        if a["wins"] / a["n"] > b["wins"] / b["n"]:  # violates monotonicity -> pool
+            blocks[i] = {"lo_key": a["lo_key"], "hi_key": b["hi_key"], "wins": a["wins"] + b["wins"], "n": a["n"] + b["n"]}
+            del blocks[i + 1]
+            i = max(i - 1, 0)
+        else:
+            i += 1
+    return blocks
+
+
+def _block_label(block: dict, is_first: bool, is_last: bool, next_lo: int | None) -> str:
+    if is_first and is_last:
+        return "all confidence levels"
+    if is_first:
+        return f"below {next_lo}"
+    if is_last:
+        return f"{block['lo_key']}+"
+    return f"{block['lo_key']}–{next_lo - 1}"
+
+
+def get_range_blocks(force: bool = False) -> list[dict]:
+    import time
+
+    now = time.time()
+    if not force and _range_cache["blocks"] is not None and now - _range_cache["ts"] < _RANGE_CACHE_TTL_SECONDS:
+        return _range_cache["blocks"]
+    rows = [r for r in _traded_rows() if r.confidence is not None]
+    blocks = build_range_blocks([(r.confidence, r.status == "closed_win") for r in rows])
+    _range_cache.update(ts=now, blocks=blocks)
+    return blocks
+
+
+def range_display(raw_confidence: int | None, blocks: list[dict] | None = None) -> dict:
+    """The user-facing calibrated display: a RANGE label, the pooled observed
+    win rate for that range (integer %, with a 95% Wilson interval) and the
+    sample sizes behind it. If the range holds fewer than RANGE_MIN_BLOCK_N
+    resolved trades, the overall observed win rate is shown instead and the
+    evidence is labelled INSUFFICIENT DATA."""
+    if raw_confidence is None:
+        return {"raw_confidence": None, "range_label": None, "observed_probability_pct": None, "evidence": "INSUFFICIENT DATA", "text": "No confidence to display."}
+    blocks = blocks if blocks is not None else get_range_blocks()
+    total_n = sum(b["n"] for b in blocks)
+    if total_n == 0:
+        return {"raw_confidence": raw_confidence, "range_label": None, "observed_probability_pct": None, "n_total": 0, "evidence": "INSUFFICIENT DATA",
+                "text": "No resolved trades yet - no observed probability available."}
+    k = _range_key(raw_confidence)
+    idx = next(i for i, b in enumerate(blocks) if b["lo_key"] <= k <= b["hi_key"]) if any(b["lo_key"] <= k <= b["hi_key"] for b in blocks) else (0 if k < blocks[0]["lo_key"] else len(blocks) - 1)
+    b = blocks[idx]
+    label = _block_label(b, idx == 0, idx == len(blocks) - 1, blocks[idx + 1]["lo_key"] if idx + 1 < len(blocks) else None)
+    if b["n"] >= RANGE_MIN_BLOCK_N:
+        wins, n, evidence = b["wins"], b["n"], "LIKELY" if b["n"] >= 30 else "POSSIBLE"
+    else:
+        wins, n, evidence = sum(x["wins"] for x in blocks), total_n, "INSUFFICIENT DATA"
+        label = "all confidence levels (this range has too few trades)"
+    lo, hi = _wilson_ci(wins, n)
+    pct = round(wins / n * 100)
+    return {
+        "raw_confidence": raw_confidence,
+        "range_label": label,
+        "observed_probability_pct": pct,
+        "interval_pct": [round(lo), round(hi)],
+        "n_range": n,
+        "n_total": total_n,
+        "evidence": evidence,
+        "text": f"Observed win rate ~{pct}% (95% interval {round(lo)}–{round(hi)}%) "
+                f"{('across ' + label) if label.startswith('all ') else ('for confidence ' + label)}, "
+                f"based on {n} of {total_n} resolved historical trades. Raw confidence is not a probability.",
+        "tooltip": f"Based on {total_n} historical trades. Expected to become more precise as more trades resolve.",
     }
