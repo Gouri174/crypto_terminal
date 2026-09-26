@@ -12,6 +12,7 @@ from app.analytics import (
     calibration_dashboard as calibration_dashboard_module,
     daily_scorecard,
     heartbeat as heartbeat_module,
+    observed_outcomes as observed_outcomes_module,
     decision_audit,
     karma_explain,
     market_health,
@@ -311,3 +312,10 @@ async def scanner_heartbeat_endpoint():
     """Is the scanner alive right now? ok / late / down, from the newest
     ScanSnapshot. Used by deploy/heartbeat_watch.py and any dashboard."""
     return heartbeat_module.scanner_heartbeat()
+
+
+@router.get("/performance/observed-outcomes")
+async def observed_outcomes_endpoint(direction: str | None = None, symbol: str | None = None):
+    """TP1/TP2/TP3/stop frequencies with n and Wilson intervals — the honest
+    replacement for showing the EV number. Optional direction/symbol filters."""
+    return observed_outcomes_module.observed_outcomes(direction=direction, symbol=symbol)

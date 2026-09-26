@@ -16,6 +16,8 @@ forensic_diagnostics.py's data_milestones()) precisely so it doesn't
 overwhelm a coin's own real data once it has any.
 """
 
+import math
+
 from sqlalchemy import select
 
 from app.db import SessionLocal
@@ -48,6 +50,62 @@ def _profit_factor(rows: list[TradeOutcome]) -> float | None:
     gains = sum(r for r in rets if r > 0)
     loss = sum(r for r in rets if r < 0)
     return round(gains / abs(loss), 3) if loss else None
+
+
+# ---------------------------------------------------------------------------
+# Karma V3.3-D — descriptive history labels.
+#
+# Deliberately NOT called Trusted/Watch/Avoid: in the 118-trade audit the
+# (look-ahead-safe) reliability score did not predict later outcomes
+# (OR 0.65, p=0.35), so a predictive-sounding label would overstate what the
+# number means. These labels only describe the symbol's PAST resolved trades
+# relative to the pooled win rate, using a posterior probability threshold
+# (not raw counts), so they demand more evidence for stronger labels.
+# ---------------------------------------------------------------------------
+LABEL_POSITIVE = "Positive history"
+LABEL_NEGATIVE = "Negative history"
+LABEL_INSUFFICIENT = "Insufficient history"
+P_POSITIVE = 0.90   # P(true win rate > pooled) needed for Positive history
+P_NEGATIVE = 0.95   # P(true win rate < pooled) needed for Negative history
+# With a uniform prior, 2 wins from 2 trades already clears P_POSITIVE, which
+# is not a meaningful history. No label other than "Insufficient history" is
+# issued below this many resolved trades.
+MIN_TRADES_FOR_LABEL = 5
+LABEL_CAVEAT = (
+    "Describes past resolved trades only. Reliability has not been shown to predict later outcomes "
+    "(chronological test on 118 trades: OR 0.65, p=0.35), so this is context, not a forecast."
+)
+
+
+def _prob_above(wins: int, n: int, pooled_rate: float) -> float:
+    """P(true win rate > pooled_rate) under a uniform-prior Beta(1+wins, 1+losses) posterior."""
+    a, b = 1 + wins, 1 + (n - wins)
+    try:
+        from scipy.stats import beta
+
+        return float(1 - beta.cdf(pooled_rate, a, b))
+    except Exception:  # scipy is a transitive dependency of scikit-learn; keep a dependency-free fallback
+        mean = a / (a + b)
+        var = a * b / ((a + b) ** 2 * (a + b + 1))
+        z = (pooled_rate - mean) / math.sqrt(var)
+        return 0.5 * math.erfc(z / math.sqrt(2))
+
+
+def history_label(wins: int, n: int, pooled_rate: float) -> dict:
+    if n == 0:
+        return {"history_label": LABEL_INSUFFICIENT, "p_above_pooled": None, "label_note": "No resolved trades for this symbol."}
+    p_above = _prob_above(wins, n, pooled_rate)
+    if n < MIN_TRADES_FOR_LABEL:
+        return {"history_label": LABEL_INSUFFICIENT, "p_above_pooled": round(p_above, 3),
+                "label_note": f"Only {n} resolved trade(s); at least {MIN_TRADES_FOR_LABEL} are needed before any history label is issued. {LABEL_CAVEAT}"}
+    if p_above >= P_POSITIVE:
+        label = LABEL_POSITIVE
+    elif (1 - p_above) >= P_NEGATIVE:
+        label = LABEL_NEGATIVE
+    else:
+        label = LABEL_INSUFFICIENT
+    return {"history_label": label, "p_above_pooled": round(p_above, 3),
+            "label_note": f"{n} resolved trade(s). {LABEL_CAVEAT}"}
 
 
 def _shrunk_win_rate(wins: int, n: int, pooled_rate: float, prior_strength: int) -> float:
@@ -88,6 +146,7 @@ def symbol_reliability(symbol: str | None = None, prior_strength: int = PRIOR_ST
             "avg_return_pct": _avg([r.realized_return_pct for r in sym_rows]),
             "avg_stop_slippage_pct": _avg(slippage),
             "avg_max_drawdown_pct": _avg([r.max_drawdown_pct for r in sym_rows]),
+            **history_label(wins, n, pooled_rate),
             "note": (
                 f"Shrunk toward the pooled win rate ({round(pooled_rate * 100, 1)}%) using a "
                 f"{prior_strength}-pseudo-trade prior — raw_win_rate_pct is the unshrunk figure, "
