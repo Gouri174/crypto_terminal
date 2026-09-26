@@ -74,6 +74,10 @@ def open_and_resolve(symbol, rsi, direction, confidence, final_price, status_tar
 
 
 def test_ev_and_red_flag_leaderboards():
+    # The real dev DB now holds real resolved trades with a stored EV/red flags (post 2026-09-12), so this
+    # test measures a before/after DELTA and looks for its own fake symbols rather than asserting n == 2.
+    ev_before = pc.ev_leaderboard(min_sample=1)["n"]
+    rf_before = pc.red_flag_leaderboard()
     # A chop-zone (RSI 35) long that wins -- triggers rsi_chop_zone + weak
     # structure + no history (structure=6 < 9) = 3 red flags.
     open_and_resolve(FAKE_SYMBOLS[0], rsi=35, direction="long", confidence=63, final_price=110.5, status_target="closed_win")
@@ -81,13 +85,15 @@ def test_ev_and_red_flag_leaderboards():
     open_and_resolve(FAKE_SYMBOLS[1], rsi=60, direction="long", confidence=63, final_price=94.5, status_target="closed_loss")
 
     ev = pc.ev_leaderboard(min_sample=1)
-    check("ev_leaderboard picks up both newly-opened trades", ev["n"] == 2, ev)
+    ranked_syms = {e["symbol"] for e in ev["ranked_by_expected_r"]}
+    check("ev_leaderboard picks up both newly-opened trades", ev["n"] == ev_before + 2 and set(FAKE_SYMBOLS[:2]) <= ranked_syms, (ev["n"], ev_before))
     check("ranked_by_expected_r is sorted descending by expected_r", ev["ranked_by_expected_r"][0]["expected_r"] >= ev["ranked_by_expected_r"][-1]["expected_r"], ev["ranked_by_expected_r"])
     check("each entry reports its realized_r alongside expected_r", all("realized_r" in e for e in ev["ranked_by_expected_r"]))
 
     rf = pc.red_flag_leaderboard()
-    check("red_flag_leaderboard picks up both newly-opened trades", rf["n"] == 2, rf)
-    check("bucket for red_flag_score=3 exists (the chop-zone trade)", 3 in rf["by_red_flag_score"], rf["by_red_flag_score"])
+    check("red_flag_leaderboard picks up both newly-opened trades", rf["n"] == rf_before["n"] + 2, (rf["n"], rf_before["n"]))
+    before3 = rf_before["by_red_flag_score"].get(3, {}).get("n", 0)
+    check("bucket for red_flag_score=3 grew by the chop-zone trade", rf["by_red_flag_score"].get(3, {}).get("n", 0) == before3 + 1, rf["by_red_flag_score"])
 
 
 try:
