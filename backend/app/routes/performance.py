@@ -24,6 +24,7 @@ from app.analytics import (
     trade_journal,
     trade_quality,
     trade_truth,
+    trade_verdict,
 )
 from app.engine import calibration
 from app.engine import performance_center as pc
@@ -319,3 +320,19 @@ async def observed_outcomes_endpoint(direction: str | None = None, symbol: str |
     """TP1/TP2/TP3/stop frequencies with n and Wilson intervals — the honest
     replacement for showing the EV number. Optional direction/symbol filters."""
     return observed_outcomes_module.observed_outcomes(direction=direction, symbol=symbol)
+
+
+@router.get("/performance/trade-verdicts")
+async def trade_verdict_leaderboard():
+    """One primary verdict per resolved trade (Karma V3.3-B): count, win rate,
+    average/median return, PnL contribution and top symbols, plus base rates so
+    the descriptive labels are not mistaken for causes."""
+    return trade_verdict.verdict_leaderboard()
+
+
+@router.get("/performance/trade-verdict/{trade_outcome_id}")
+async def trade_verdict_for_id(trade_outcome_id: int):
+    result = trade_verdict.verdict_for_trade(trade_outcome_id)
+    if result is None:
+        raise HTTPException(status_code=404, detail=f"No resolved TradeOutcome with id={trade_outcome_id}")
+    return result
