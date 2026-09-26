@@ -11,6 +11,7 @@ from fastapi import APIRouter, HTTPException
 from app.analytics import (
     calibration_dashboard as calibration_dashboard_module,
     daily_scorecard,
+    heartbeat as heartbeat_module,
     decision_audit,
     karma_explain,
     market_health,
@@ -299,3 +300,14 @@ async def calibration_dashboard_endpoint():
     """Phase H: confidence calibration curve + Brier/ECE + TP-continuation
     calibration + EV calibration in one payload — all reused, nothing new."""
     return calibration_dashboard_module.calibration_dashboard()
+
+
+# ---------------------------------------------------------------------------
+# Karma V3.3 additions (operations / honesty — read-only)
+# ---------------------------------------------------------------------------
+
+@router.get("/performance/heartbeat")
+async def scanner_heartbeat_endpoint():
+    """Is the scanner alive right now? ok / late / down, from the newest
+    ScanSnapshot. Used by deploy/heartbeat_watch.py and any dashboard."""
+    return heartbeat_module.scanner_heartbeat()
